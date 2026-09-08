@@ -28,6 +28,7 @@ console.log(`listening on http://localhost:${config.port}`);
  * client does not, so a deadline ends the drain regardless. A second signal force-kills.
  */
 async function shutdown(signal: string) {
+  for (const s of ["SIGINT", "SIGTERM"] as const) process.removeAllListeners(s); // next one kills
   console.log(`${signal}: draining`);
   setTimeout(() => {
     console.error("drain deadline reached, exiting");

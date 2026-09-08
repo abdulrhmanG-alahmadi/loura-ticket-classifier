@@ -79,3 +79,32 @@ test("boot, ingest, classify, drain, restart", async () => {
   expect(log).toContain("requeued 1 ticket(s)");
   expect(log).toContain("classified t-1001");
 }, 20_000);
+
+test("a second signal of either kind kills a stalled drain", async () => {
+  const proc = start();
+  await until(async () => (await fetch(base)).ok);
+  // A request that declares a body and never sends it holds the HTTP drain open.
+  const stalled = await Bun.connect({
+    hostname: "localhost",
+    port,
+    socket: {
+      data() {},
+      open(s) {
+        s.write(
+          "POST /v1/tickets HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n",
+        );
+      },
+    },
+  });
+  await Bun.sleep(100); // let the server read the partial request
+  proc.kill("SIGTERM");
+  await Bun.sleep(300);
+  expect(proc.exitCode).toBeNull(); // still draining
+  proc.kill("SIGINT");
+  await proc.exited;
+  stalled.end();
+  expect(proc.signalCode).toBe("SIGINT");
+  const log = await new Response(proc.stdout).text();
+  expect(log).toContain("SIGTERM: draining");
+  expect(log).not.toContain("SIGINT: draining");
+}, 20_000);

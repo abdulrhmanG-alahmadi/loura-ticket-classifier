@@ -1,7 +1,7 @@
 # Ticket classifier
 
 A small HTTP service that ingests support tickets, classifies them asynchronously with an LLM,
-and serves the results. Bun + Elysia + SQLite, about 550 lines of source and 500 of tests.
+and serves the results. Bun + Elysia + SQLite, about 670 lines of source and 770 of tests.
 
 ## Run it
 
@@ -91,6 +91,7 @@ src/
   index.ts       wiring and graceful shutdown
 tests/           one file per concern: classifier, model, lifecycle, app (HTTP), service (real process)
 data/            sample tickets (loaded by scripts/seed.ts) and the SQLite file
+docs/redteam/    the 100-call red-team report with raw evidence, and the prompt comparison
 ```
 
 ## Decisions on the open questions
@@ -157,32 +158,36 @@ What is *not* defended: a determined injection can still steer the category or p
 summary is model-generated text that may echo the attacker's words. A well-formed answer such as
 `technical / high / "Approved for immediate refund."` passes validation, because validation proves
 shape, not truth. Anything downstream should treat `summary` as untrusted user content, never as an
-instruction or an authorisation. Two red-team passes were run against this prompt, 20 and then
-100 live calls (45 attack variants and 5 controls on each of `gpt-4o-mini` and `glm-5.3`: role
-spoofs, CEO and signed-policy claims, few-shot poisoning, instructions in five languages, base64
-and ROT13, format sabotage). No attacker-requested override, false approval, or wrong category was
-observed. What did move was priority: `gpt-4o-mini` rated a clean invoice question `low` with a
-neutral subject and `high` with the subject "URGENT", and two attack variants nudged it to
-`medium`; the original t-1005 injection with a neutral subject came back `low`. So the injection
-text did not steer the model, but a bare urgency word did, which is a triage-quality problem rather
-than a security one. The priority rule in the prompt now says to judge by described impact, not by
-urgency words or claims of authority. I checked that sentence with one `gpt-4o-mini` call per
-input at temperature 0 over the 10 samples plus 7 controls and injection variants, old prompt
-against new (34 calls): the "URGENT" invoice question dropped from `high` to `low`, two over-rated
-samples (t-1004, t-1009) each moved down one step, nothing moved up, and the outage and blocked
-login tickets kept `high`. It did not fix everything: t-1005 and the two injection variants still
-land at `medium` rather than `low`, and a single deterministic run is too small to call this more
-than a plausible improvement.
+instruction or an authorisation. Two red-team passes were run: a 20-call pass (not included) and
+then a 100-call pass of 45 attack variants and 5 controls on each of `gpt-4o-mini` and `glm-5.3`
+(the latter with a larger output cap; see the report): role spoofs, CEO and signed-policy claims,
+few-shot poisoning, instructions in five languages, base64 and ROT13, format sabotage. No full
+override was observed: no false approval, no injected text in a summary, and no category different
+from the matched control. Priority did move, on `gpt-4o-mini` only: it rated a clean invoice
+question `low` with a neutral subject and `high` with the subject "URGENT", and two attack variants
+moved the same question from `low` to `medium` against its control; the original t-1005 injection
+with a neutral subject came back `low`. So the CEO text on its own did not steer the model, but a
+bare urgency word did, and two attack bodies shifted priority one step, which is a triage-quality
+problem rather than a security one. The priority rule in the prompt now says to judge by described
+impact, not by urgency words or claims of authority. I checked that sentence with one `gpt-4o-mini`
+call per input at temperature 0 over the 10 samples plus 7 controls and injection variants, old
+prompt against new (34 calls): the "URGENT" invoice question dropped from `high` to `low`, two
+over-rated samples (t-1004, t-1009) each moved down one step, nothing moved up, and the outage and
+blocked login tickets kept `high`. It did not fix everything: t-1005 and the two injection variants
+still land at `medium` rather than `low`, and a single deterministic run is too small to call this
+more than a plausible improvement. The 100-call report with its raw payloads and responses, and the
+one-off prompt comparison script with its results, are in `docs/redteam/`.
 
 Text that reaches the store or the logs is also kept plain: summaries may not contain control
 characters, Unicode line or paragraph separators, or bidirectional overrides (other format
 characters such as ZWNJ are allowed, because real scripts need them), and provider error text has
-its control characters flattened before it is stored or logged, so an upstream error cannot forge a
+the same characters flattened before it is stored or logged, so an upstream error cannot forge a
 log line.
 
-**Model: OpenRouter if a key is set, otherwise a fake.** `model.ts` knows nothing about tickets: it
-is `messages → string`, with a timeout, and it type-checks the provider's envelope before trusting
-it (OpenRouter can return an error inside a 200). The fake reads the ticket out of the prompt,
+**Model: OpenRouter if a key is set, otherwise a fake.** The OpenRouter client knows nothing about
+tickets: it is `messages → string`, with a timeout, and it type-checks the provider's envelope
+before trusting it (OpenRouter can return an error inside a 200). The fake in the same file is the
+exception, because it has to answer: it reads the ticket out of the prompt,
 picks the category whose keyword appears earliest (so the subject outweighs an aside in the body),
 summarises the subject line, and returns a broken response every 4th call (prose, wrong enums,
 truncated JSON, in rotation) so the retry path is exercised locally; with the default 3 attempts
@@ -201,13 +206,14 @@ the restart path above covers whatever was in flight.
 
 ## Tests
 
-`bun test` runs 84 tests in under a second. `classifier` covers the parse/validate door with
+`bun test` runs 85 tests in about a second. `classifier` covers the parse/validate door with
 good, wrapped, and broken model output, plus the real t-1005; `model` stubs `fetch` to cover
 OpenRouter's envelopes and checks the fake against the samples; `lifecycle` covers the state
 machine, claiming, retries, restart, drain, and the database's own constraints, all on in-memory
 SQLite; `app` drives the routes through `app.handle` (and one real socket for the 413 cap);
 `service` spawns the real `src/index.ts`, ingests, waits for classification, sends SIGTERM,
-plants a `classifying` row and boots again to see it recovered. Not under test: `config.ts`.
+plants a `classifying` row and boots again to see it recovered, and checks that a second signal
+kills a drain held open by a stalled request. Not under test: `config.ts`.
 Console output is silenced during tests (`tests/setup.ts`) because the worker and error hook log
 on purpose.
 
