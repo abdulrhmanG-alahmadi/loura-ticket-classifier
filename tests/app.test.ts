@@ -32,6 +32,17 @@ describe("POST /tickets", () => {
     expect(await json(res)).toMatchObject({ ...sample, status: "pending", classification: null });
   });
 
+  test("every accepted id round-trips through its Location header", async () => {
+    for (const id of ["a", "MSG-123", "x.y:z@host", "0", "a".repeat(100)]) {
+      const res = await post({ ...sample, id });
+      expect(res.status).toBe(201);
+      const followed = await app.handle(
+        new Request(`http://localhost${res.headers.get("location")}`),
+      );
+      expect((await json(followed)).id).toBe(id);
+    }
+  });
+
   test("is idempotent on id", async () => {
     await post(sample);
     const res = await post({ ...sample, subject: "different" });
@@ -44,6 +55,10 @@ describe("POST /tickets", () => {
     ["empty id", { ...sample, id: "" }],
     ["oversized body", { ...sample, body: "x".repeat(20_001) }],
     ["wrong type", { ...sample, subject: 42 }],
+    ["an id of '.'", { ...sample, id: "." }],
+    ["an id of '..'", { ...sample, id: ".." }],
+    ["an id with whitespace", { ...sample, id: "t 1" }],
+    ["an id with a slash", { ...sample, id: "t/1" }],
   ])("rejects %s with 422 and field-level details", async (_name, body) => {
     const res = await post(body);
     expect(res.status).toBe(422);
@@ -157,12 +172,16 @@ describe("GET /tickets", () => {
     expect(second).toMatchObject({ total: 3, limit: 2, offset: 2 });
   });
 
-  test.each(["category=refunds", "priority=urgent", "limit=0", "limit=101", "offset=-1"])(
-    "rejects ?%s with 422",
-    async (query) => {
-      expect((await get(`/tickets?${query}`)).status).toBe(422);
-    },
-  );
+  test.each([
+    "category=refunds",
+    "priority=urgent",
+    "limit=0",
+    "limit=101",
+    "offset=-1",
+    "offset=9223372036854775808",
+  ])("rejects ?%s with 422", async (query) => {
+    expect((await get(`/tickets?${query}`)).status).toBe(422);
+  });
 
   test("names the allowed values when a filter is wrong", async () => {
     const { error } = await json(get("/tickets?category=refunds"));

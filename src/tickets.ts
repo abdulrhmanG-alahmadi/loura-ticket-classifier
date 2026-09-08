@@ -27,8 +27,16 @@ export const Classification = t.Object({
 });
 export type Classification = typeof Classification.static;
 
+/** Starts alphanumeric so "." and ".." cannot be ids; no whitespace or slashes so ids survive URLs. */
+const ID_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._:@-]*$";
+
 export const NewTicket = t.Object({
-  id: t.String({ minLength: 1, maxLength: 100 }),
+  id: t.String({
+    minLength: 1,
+    maxLength: 100,
+    pattern: ID_PATTERN,
+    error: "must be 1-100 characters: letters, digits, . _ : @ -, starting with a letter or digit",
+  }),
   subject: t.String({ maxLength: 500 }),
   body: t.String({ maxLength: 20_000 }),
 });
@@ -47,7 +55,14 @@ export const ListQuery = t.Object({
       error: "must be an integer from 1 to 100",
     }),
   ),
-  offset: t.Optional(t.Integer({ minimum: 0, default: 0, error: "must be an integer >= 0" })),
+  offset: t.Optional(
+    t.Integer({
+      minimum: 0,
+      maximum: Number.MAX_SAFE_INTEGER,
+      default: 0,
+      error: "must be an integer >= 0",
+    }),
+  ),
 });
 export type ListQuery = typeof ListQuery.static;
 

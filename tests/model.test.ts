@@ -56,6 +56,11 @@ describe("fakeModel", () => {
       category: "billing",
     });
     expect(JSON.parse(await ask("cannot log in"))).toMatchObject({ category: "account" });
+    const fresh = fakeModel();
+    const t1006 = await fresh([
+      { role: "user", content: "Would love a dark mode option. Not urgent, just a nice to have." },
+    ]);
+    expect(JSON.parse(t1006)).toMatchObject({ category: "other", priority: "low" });
     const third = await ask("anything"); // 3rd call is deliberately broken
     expect(() => parseClassification(third)).toThrow(InvalidModelOutput);
   });

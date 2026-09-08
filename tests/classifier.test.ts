@@ -22,6 +22,14 @@ describe("parseClassification", () => {
     expect(parseClassification(text)).toEqual(valid);
   });
 
+  test.each([
+    "Two charges of 49.00 on the 3rd and the 4th.",
+    "Uploads over 20MB fail with E_TIMEOUT on v2.1 of the API!",
+    "Why was the customer charged twice?",
+  ])("accepts the single sentence %j", (summary) => {
+    expect(parseClassification(JSON.stringify({ ...valid, summary })).summary).toBe(summary);
+  });
+
   test("normalises enum casing and whitespace, drops unknown keys", () => {
     const text = JSON.stringify({
       ...valid,
@@ -41,6 +49,14 @@ describe("parseClassification", () => {
     ["empty summary", JSON.stringify({ ...valid, summary: "   " })],
     ["summary of the wrong type", JSON.stringify({ ...valid, summary: ["a"] })],
     ["a JSON string instead of an object", JSON.stringify("{}")],
+    [
+      "a two-sentence summary",
+      JSON.stringify({ ...valid, summary: "Customer cannot log in. Password reset did not help." }),
+    ],
+    [
+      "a summary with a line break",
+      JSON.stringify({ ...valid, summary: "Charged twice.\nWants refund." }),
+    ],
   ])("rejects %s", (_name, text) => {
     expect(() => parseClassification(text)).toThrow(InvalidModelOutput);
   });

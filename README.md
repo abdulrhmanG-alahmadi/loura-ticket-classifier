@@ -25,7 +25,7 @@ answers land as `failed` tickets instead of retries. `bun run check` runs Biome 
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `POST` | `/v1/tickets` | Body `{ id, subject, body }`. `201` + `Location` on create, `200` with the stored ticket if the id was seen before. |
+| `POST` | `/v1/tickets` | Body `{ id, subject, body }`. `id` is 1–100 chars of letters, digits, `. _ : @ -`, starting with a letter or digit, so it survives a URL. `201` + `Location` on create, `200` with the stored ticket if the id was seen before. |
 | `GET` | `/v1/tickets/:id` | `404` if unknown. |
 | `GET` | `/v1/tickets` | Filters `category`, `priority`, `status`; `limit` (1–100, default 20) and `offset`. Returns `{ items, total, limit, offset }`, newest first. |
 
@@ -135,8 +135,10 @@ to the last `}` (models like to add prose and code fences), `JSON.parse`s it, lo
 the two enum fields, drops unknown keys, then checks the result against the same TypeBox schema that
 types the API. Anything else throws `InvalidModelOutput` and counts as a failed attempt. Nothing that
 is not a `Classification` can reach `storeClassification`, and the database re-checks the enums.
-"One sentence" is asked of the model and bounded at 500 characters, not enforced: counting
-sentences in free text is guesswork, and a two-sentence summary is not a data-integrity problem.
+"One sentence" is part of the contract, so it is enforced too: a summary containing a sentence
+terminator followed by more text, or a line break, is rejected like a bad enum. The check is a
+heuristic (decimals and version numbers pass; "Mr. Smith" would not), which I accept because the
+model is asked for exactly one sentence and a false positive costs a retry, not data.
 
 **Prompt injection.** Three layers, in order of how much I trust them:
 
@@ -163,14 +165,15 @@ ticket. Being keyword-based, the fake is steered by t-1005 exactly as a naive mo
 ("URGENT" makes it high, "refund" and "invoices" make it billing), which is a fair reminder that
 the prompt is the weakest of the three layers above.
 
-**Graceful shutdown (the optional extra I picked).** On `SIGINT`/`SIGTERM` the server stops
-accepting requests, the worker loops finish the ticket they hold and stop claiming new ones, then
-the database is closed. Each model call has a 30 s timeout, so the drain is bounded. A second signal
-kills the process outright; the restart path above then covers whatever was in flight.
+**Graceful shutdown (the optional extra I picked).** On `SIGINT`/`SIGTERM` the workers stop
+claiming and the server stops accepting at the same moment; then in-flight requests complete, the
+loops finish the ticket they hold, and the database is closed. Each model call has a 30 s timeout,
+so the drain is bounded. A second signal kills the process outright; the restart path above then
+covers whatever was in flight.
 
 ## Tests
 
-`bun test` runs 60 tests in about 200 ms against in-memory SQLite, no ports. `classifier` covers
+`bun test` runs 71 tests in about 200 ms against in-memory SQLite, no ports. `classifier` covers
 the parse/validate door with good, wrapped, and broken model output; `model` stubs `fetch` to cover
 OpenRouter's envelopes and the fake's cadence; `lifecycle` covers the state machine, claiming,
 retries, restart, drain, and the database's own constraints; `app` drives the routes through
@@ -199,6 +202,8 @@ signal handling in `index.ts`, and `config.ts`. Console output is silenced durin
   on `category`/`priority` for that reason). Deliberate at this size; a dynamic `WHERE` plus an
   index is the fix when it matters.
 - Case-normalising enums is a leniency I chose deliberately; a purist would reject `"Billing"`.
+- The one-sentence check is a regex. It cannot tell an abbreviation from a sentence end, so a
+  summary like "Mr. Smith was charged twice." is rejected and retried.
 - Elysia quirk worth knowing: an optional `t.UnionEnum` in a query schema silently defaults to the
   enum's first value, which turned every unfiltered list into `category=billing` until a test caught
   it. `tickets.ts` uses a union of literals instead.

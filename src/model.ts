@@ -55,10 +55,10 @@ export function fakeModel({ brokenEvery = 4 } = {}): LlmModel {
         : /error|500|timeout|api|upload|export|broken|bug/.test(text)
           ? "technical"
           : "other";
-    const priority = /urgent|blocking|production|outage|500/.test(text)
-      ? "high"
-      : /not urgent|nice to have|feature request/.test(text)
-        ? "low"
+    const priority = /not urgent|nice to have|feature request/.test(text)
+      ? "low"
+      : /urgent|blocking|production|outage|500/.test(text)
+        ? "high"
         : "medium";
     return JSON.stringify({ category, priority, summary: `Customer reports a ${category} issue.` });
   };
