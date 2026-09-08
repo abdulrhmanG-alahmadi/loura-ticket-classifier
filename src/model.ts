@@ -63,7 +63,7 @@ export function openRouterModel(opts: {
     const failure = data?.error ?? data?.choices?.[0]?.error;
     if (failure) {
       const message = `openrouter: ${String(failure.message ?? "unknown error")}`;
-      throw new ModelError(message, permanentStatus(failure.code));
+      throw new ModelError(message, permanentStatus(failure.code), retryAfterMs(res));
     }
     const text = data?.choices?.[0]?.message?.content;
     if (typeof text !== "string" || text === "") throw new Error("openrouter: empty response");

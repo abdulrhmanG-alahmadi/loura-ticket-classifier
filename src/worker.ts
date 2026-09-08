@@ -67,7 +67,8 @@ export class Worker {
   /**
    * Any failure, from the model or from the store's own checks, counts as one attempt. A permanent
    * provider error (bad key, bad request) fails the ticket at once; otherwise the next attempt waits
-   * for the jittered backoff or for what the provider asked in Retry-After, whichever is longer.
+   * for the jittered, capped backoff or for what the provider asked in Retry-After, whichever is
+   * longer. The provider's ask is honoured in full: retrying sooner is a guaranteed failure.
    */
   private async process(ticket: Ticket): Promise<void> {
     try {
@@ -78,7 +79,7 @@ export class Worker {
       const permanent = err instanceof ModelError && err.permanent;
       const asked = err instanceof ModelError ? err.retryAfterMs : 0;
       const backoff = this.opts.backoffMs * 2 ** (attempt - 1) * (0.5 + Math.random());
-      const delay = Math.min(Math.max(backoff, asked), MAX_BACKOFF_MS);
+      const delay = Math.max(Math.min(backoff, MAX_BACKOFF_MS), asked);
       const retryAt =
         !permanent && attempt < this.opts.maxAttempts ? new Date(Date.now() + delay) : null;
       // Provider text is untrusted: flatten anything that could forge or reshape a log line.

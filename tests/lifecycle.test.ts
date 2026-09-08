@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { openDb } from "../src/db";
 import { ModelError } from "../src/model";
 import { type Classification, TicketRepo } from "../src/tickets";
@@ -150,13 +150,29 @@ describe("worker", () => {
     await new Worker(repo, throttled, opts).tick(); // backoffMs is 0: only Retry-After can delay it
     expect(repo.get("t-2")).toMatchObject({ status: "pending", attempts: 1 });
     expect(dueIn("t-2")).toBeGreaterThan(55_000);
+
+    submit("t-3"); // longer than our own 5-minute cap: the provider's ask still wins
+    const patient = async () => {
+      throw new ModelError("openrouter 429: slow down", false, 600_000);
+    };
+    await new Worker(repo, patient, opts).tick();
+    expect(dueIn("t-3")).toBeGreaterThan(595_000);
   });
 
-  test("backoff is jittered around the base delay", async () => {
+  test("backoff is jittered by ±50% around the base delay", async () => {
+    const random = spyOn(Math, "random");
+    afterEach(() => random.mockRestore());
+    const worker = new Worker(repo, boom, { ...opts, backoffMs: 10_000 });
     submit("t-1");
-    await new Worker(repo, boom, { ...opts, backoffMs: 10_000 }).tick();
-    expect(dueIn("t-1")).toBeGreaterThan(4_000);
-    expect(dueIn("t-1")).toBeLessThan(15_000);
+    random.mockReturnValue(0);
+    await worker.tick();
+    expect(dueIn("t-1")).toBeGreaterThan(4_900);
+    expect(dueIn("t-1")).toBeLessThan(5_100);
+    submit("t-2");
+    random.mockReturnValue(0.999);
+    await worker.tick();
+    expect(dueIn("t-2")).toBeGreaterThan(14_800);
+    expect(dueIn("t-2")).toBeLessThan(15_100);
   });
 
   test("provider error text is flattened so it cannot forge log lines", async () => {

@@ -1,7 +1,7 @@
 # Ticket classifier
 
 A small HTTP service that ingests support tickets, classifies them asynchronously with an LLM,
-and serves the results. Bun + Elysia + SQLite, about 750 lines of source and 880 of tests.
+and serves the results. Bun + Elysia + SQLite, about 750 lines of source and 900 of tests.
 
 ## Run it
 
@@ -131,12 +131,13 @@ this code path depends on ticket content.
 (`LLM_TIMEOUT_MS`, 30 s per call), a non-2xx, a 200 from OpenRouter with an error inside it, or
 output that fails validation. Two exceptions to "wait and try again": a permanent provider error (a
 4xx other than 408 and 429, so a bad key or a bad request) fails the ticket on the first attempt,
-because waiting cannot fix it; and when the provider sends `Retry-After`, the next attempt waits
-for that or for the backoff, whichever is longer (still capped at 5 min), rather than burning three
-attempts in three seconds against a rate limit. Validation failures are retried too: a retry costs
-one more call, and OpenRouter may route it to a different upstream provider. I have not measured
-how often that helps (in 134 live calls no output failed validation), so it is a cheap bet, not an
-established fact. `failed` tickets keep their last error and are visible via
+because waiting cannot fix it; and when the provider sends `Retry-After` (on a 4xx/5xx or inside
+a 200 envelope), the next attempt waits for that or for the backoff, whichever is longer, rather
+than burning three attempts in three seconds against a rate limit. Only our own backoff is capped;
+the provider's ask is honoured in full, because retrying sooner is a guaranteed failure.
+Validation failures are retried too: a retry costs one more call, and OpenRouter may route it to a
+different upstream provider. I have not measured how often that helps (in 134 live calls no output
+failed validation), so it is a cheap bet, not an established fact. `failed` tickets keep their last error and are visible via
 `GET /v1/tickets?status=failed`. There is no re-classify endpoint yet (see below).
 
 **Validation: parse, normalise, check, or reject.** `parseClassification` cuts from the first `{`

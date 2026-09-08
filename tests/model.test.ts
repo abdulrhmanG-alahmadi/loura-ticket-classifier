@@ -70,8 +70,8 @@ describe("openRouterModel", () => {
 
     respond(200, { error: { code: 400, message: "bad request" } });
     expect(await failure()).toMatchObject({ permanent: true });
-    respond(200, { error: { code: 502, message: "provider down" } });
-    expect(await failure()).toMatchObject({ permanent: false });
+    respond(200, { error: { code: 502, message: "provider down" } }, { "Retry-After": "600" });
+    expect(await failure()).toMatchObject({ permanent: false, retryAfterMs: 600_000 });
   });
 });
 
