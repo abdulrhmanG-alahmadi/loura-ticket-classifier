@@ -70,7 +70,10 @@ export class Worker {
       const attempt = ticket.attempts + 1;
       const delay = Math.min(this.opts.backoffMs * 2 ** (attempt - 1), MAX_BACKOFF_MS);
       const retryAt = attempt < this.opts.maxAttempts ? new Date(Date.now() + delay) : null;
-      const message = (err instanceof Error ? err.message : String(err)).slice(0, 500);
+      // Provider text is untrusted: flatten control characters so it cannot forge log lines.
+      const message = (err instanceof Error ? err.message : String(err))
+        .replace(/\p{Cc}/gu, " ")
+        .slice(0, 500);
       this.repo.recordFailure(ticket.id, message, retryAt);
       const outcome = retryAt ? `retry at ${retryAt.toISOString()}` : "giving up";
       console.warn(`attempt ${attempt} failed for ${ticket.id} (${message}), ${outcome}`);

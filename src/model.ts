@@ -48,7 +48,7 @@ export function fakeModel({ brokenEvery = 4 } = {}): LlmModel {
     if (calls % brokenEvery === 0) return BROKEN[(calls / brokenEvery) % BROKEN.length] ?? "";
 
     const { subject, body } = ticketIn(messages);
-    const text = `${subject}\n${body}`.toLowerCase();
+    const text = `${subject}\n${body}`.replace(/\p{Cf}/gu, "").toLowerCase();
     const category = earliestMatch(text, CATEGORY_HINTS) ?? "other";
     const priority = /not urgent|nice to have|feature request/.test(text)
       ? "low"
@@ -56,7 +56,7 @@ export function fakeModel({ brokenEvery = 4 } = {}): LlmModel {
         ? "high"
         : "medium";
     const topic = (subject || body)
-      .replace(/\p{Cc}/gu, " ")
+      .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
       .split(/[.!?]\s|[.!?]$/)[0]
       ?.trim()
       .slice(0, MAX_TOPIC);

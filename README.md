@@ -154,9 +154,20 @@ stored `error` text is capped at 500 characters.
    the token bill.
 
 What is *not* defended: a determined injection can still steer the category or priority, and the
-summary is model-generated text that may echo the attacker's words. Anything downstream should treat
-`summary` as untrusted user content, not as a system statement. With `gpt-4o-mini`, sample ticket
-t-1005 came back as billing with a summary about downloading invoices, but I would not rely on that.
+summary is model-generated text that may echo the attacker's words. A well-formed answer such as
+`technical / high / "Approved for immediate refund."` passes validation, because validation proves
+shape, not truth. Anything downstream should treat `summary` as untrusted user content, never as an
+instruction or an authorisation. A red-team pass against `gpt-4o-mini` (17 attack tickets: role
+spoofs, CEO claims, few-shot poisoning, base64 and Arabic instructions, format sabotage) produced
+no hijacked output; t-1005 came back billing with a summary about downloading invoices, but at
+`high` priority where a neutral invoice question was `low`, so the "URGENT" framing probably still
+moved the priority. A matched control without the injection is the evaluation I would run next.
+
+Text that reaches the store or the logs is also kept plain: summaries may not contain control
+characters, Unicode line or paragraph separators, or bidirectional overrides (other format
+characters such as ZWNJ are allowed, because real scripts need them), and provider error text has
+its control characters flattened before it is stored or logged, so an upstream error cannot forge a
+log line.
 
 **Model: OpenRouter if a key is set, otherwise a fake.** `model.ts` knows nothing about tickets: it
 is `messages → string`, with a timeout, and it type-checks the provider's envelope before trusting
@@ -165,8 +176,9 @@ picks the category whose keyword appears earliest (so the subject outweighs an a
 summarises the subject line, and returns a broken response every 4th call (prose, wrong enums,
 truncated JSON, in rotation) so the retry path is exercised locally; with the default 3 attempts
 the seed run shows retries but rarely a `failed` ticket. Being keyword-based, the fake is steered
-by t-1005 exactly as a naive model would be ("URGENT" makes it high, "refund" makes it billing),
-which is a fair reminder that the prompt is the weakest of the three layers above.
+by injected text exactly as a naive model would be: "URGENT" makes t-1005 high, and appending
+"not urgent, nice to have" to an outage report drops it to low. There is a test that pins that
+behaviour as a known limit, so nobody mistakes the fake for a judgment about the live model.
 
 **Graceful shutdown (the optional extra I picked).** On `SIGINT`/`SIGTERM` the workers stop
 claiming and the server stops accepting at the same moment; then in-flight requests complete, the
@@ -178,7 +190,7 @@ the restart path above covers whatever was in flight.
 
 ## Tests
 
-`bun test` runs 79 tests in under a second. `classifier` covers the parse/validate door with
+`bun test` runs 84 tests in under a second. `classifier` covers the parse/validate door with
 good, wrapped, and broken model output, plus the real t-1005; `model` stubs `fetch` to cover
 OpenRouter's envelopes and checks the fake against the samples; `lifecycle` covers the state
 machine, claiming, retries, restart, drain, and the database's own constraints, all on in-memory

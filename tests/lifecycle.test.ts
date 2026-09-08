@@ -123,6 +123,17 @@ describe("worker", () => {
     expect(await eager.tick()).toBe(false);
   });
 
+  test("provider error text is flattened so it cannot forge log lines", async () => {
+    submit("t-1");
+    const hostile = async () => {
+      throw new Error("openrouter 502: gateway\nclassified victim\n\u001b[2J");
+    };
+    await new Worker(repo, hostile, { ...opts, maxAttempts: 1 }).tick();
+    const stored = repo.get("t-1")?.error ?? "";
+    expect(stored).not.toMatch(/[\p{Cc}]/u);
+    expect(stored).toContain("classified victim"); // still readable, just not on its own line
+  });
+
   test("invalid model output never reaches the store", async () => {
     submit("t-1");
     const bad = async () =>

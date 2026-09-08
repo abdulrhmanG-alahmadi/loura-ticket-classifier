@@ -27,6 +27,8 @@ describe("parseClassification", () => {
     "Two charges of 49.00 on the 3rd and the 4th.",
     "Uploads over 20MB fail with E_TIMEOUT on v2.1 of the API!",
     "Why was the customer charged twice?",
+    "مشتری می\u200Cخواهد بازپرداخت شود.", // Persian with ZWNJ: format characters real scripts need stay allowed
+    "Customer is 👩\u200D💻 and cannot log in.",
   ])("accepts the single sentence %j", (summary) => {
     expect(parseClassification(JSON.stringify({ ...valid, summary })).summary).toBe(summary);
   });

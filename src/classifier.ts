@@ -25,8 +25,12 @@ export function buildMessages({ subject, body }: NewTicket): Message[] {
 
 export class InvalidModelOutput extends Error {}
 
-/** A terminator followed by more text is a second sentence; control characters include line breaks. */
-const NOT_ONE_CLEAN_SENTENCE = /[.!?]\s+\S|\p{Cc}/u;
+/**
+ * A terminator followed by more text is a second sentence. Control characters (Cc), Unicode line and
+ * paragraph separators (Zl, Zp) and bidirectional overrides are rejected too; other format characters
+ * such as ZWNJ stay allowed because real scripts need them.
+ */
+const NOT_ONE_CLEAN_SENTENCE = /[.!?]\s+\S|[\p{Cc}\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069]/u;
 
 /**
  * Text → Classification, or throw. Tolerates prose around the JSON and enum casing;
@@ -51,7 +55,9 @@ export function parseClassification(text: string): Classification {
     throw new InvalidModelOutput(`${first?.path || "/"}: ${first?.message}`);
   }
   if (NOT_ONE_CLEAN_SENTENCE.test(candidate.summary)) {
-    throw new InvalidModelOutput("/summary: must be one sentence with no control characters");
+    throw new InvalidModelOutput(
+      "/summary: must be one sentence with no control or bidi characters",
+    );
   }
   return candidate;
 }
