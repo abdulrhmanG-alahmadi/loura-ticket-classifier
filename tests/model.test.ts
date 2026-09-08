@@ -77,6 +77,18 @@ describe("fakeModel", () => {
     }
   });
 
+  test.each([
+    ["the longest allowed subject", { id: "x", subject: "s".repeat(500), body: "b" }],
+    [
+      "an empty subject and the longest allowed body",
+      { id: "x", subject: "", body: "w".repeat(20_000) },
+    ],
+  ])("keeps the summary inside the 500-character contract for %s", async (_name, ticket) => {
+    const fake = fakeModel({ brokenEvery: 1000 });
+    const { summary } = parseClassification(await fake(buildMessages(ticket)));
+    expect(summary.length).toBeLessThanOrEqual(500);
+  });
+
   test("classifies by keyword and breaks on a fixed cadence", async () => {
     const fake = fakeModel({ brokenEvery: 3 });
     const ask = (body: string) => fake([{ role: "user", content: body }]);

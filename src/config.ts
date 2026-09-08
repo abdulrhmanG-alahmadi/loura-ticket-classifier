@@ -8,6 +8,7 @@ const int = (name: string, fallback: number, min = 0): number => {
 
 export const config = {
   port: int("PORT", 3000),
+  shutdownDeadlineMs: int("SHUTDOWN_DEADLINE_MS", 60_000, 1),
   dbPath: process.env.DB_PATH ?? "data/tickets.db",
   openRouter: {
     apiKey: process.env.OPENROUTER_API_KEY,

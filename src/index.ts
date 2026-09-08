@@ -24,10 +24,15 @@ console.log(`listening on http://localhost:${config.port}`);
 
 /**
  * Stop claiming and stop accepting at the same moment, then let both drain: in-flight requests
- * complete and in-flight classifications finish. A second signal force-kills.
+ * complete and in-flight classifications finish. Model calls time out on their own; a stalled
+ * client does not, so a deadline ends the drain regardless. A second signal force-kills.
  */
 async function shutdown(signal: string) {
   console.log(`${signal}: draining`);
+  setTimeout(() => {
+    console.error("drain deadline reached, exiting");
+    process.exit(1);
+  }, config.shutdownDeadlineMs).unref();
   const drained = worker.stop();
   await app.stop();
   await drained;

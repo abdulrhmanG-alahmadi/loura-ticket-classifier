@@ -170,13 +170,15 @@ which is a fair reminder that the prompt is the weakest of the three layers abov
 
 **Graceful shutdown (the optional extra I picked).** On `SIGINT`/`SIGTERM` the workers stop
 claiming and the server stops accepting at the same moment; then in-flight requests complete, the
-loops finish the ticket they hold, and the database is closed. Each model call has a 30 s timeout,
-so the drain is bounded. A second signal kills the process outright; the restart path above then
-covers whatever was in flight.
+loops finish the ticket they hold, and the database is closed. Two different waits: the worker
+drain is bounded by the 30 s model timeout, but the HTTP drain waits for in-flight requests and a
+client that stalls mid-upload can hold it open, so a deadline (`SHUTDOWN_DEADLINE_MS`, 60 s) ends
+the drain regardless with a non-zero exit. A second signal kills the process outright. Either way
+the restart path above covers whatever was in flight.
 
 ## Tests
 
-`bun test` runs 77 tests in under a second. `classifier` covers the parse/validate door with
+`bun test` runs 79 tests in under a second. `classifier` covers the parse/validate door with
 good, wrapped, and broken model output, plus the real t-1005; `model` stubs `fetch` to cover
 OpenRouter's envelopes and checks the fake against the samples; `lifecycle` covers the state
 machine, claiming, retries, restart, drain, and the database's own constraints, all on in-memory

@@ -9,12 +9,17 @@ const root = `${import.meta.dir}/..`;
 const dbPath = `${tmpdir()}/loura-service-${process.pid}.db`;
 const port = 3900 + (process.pid % 100);
 const base = `http://localhost:${port}/v1/tickets`;
-afterAll(() => {
+const children: ReturnType<typeof Bun.spawn>[] = [];
+afterAll(async () => {
+  for (const child of children) {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await child.exited.catch(() => {});
+  }
   for (const suffix of ["", "-wal", "-shm"]) rmSync(dbPath + suffix, { force: true });
 });
 
-const start = () =>
-  Bun.spawn(["bun", "src/index.ts"], {
+const start = () => {
+  const child = Bun.spawn(["bun", "src/index.ts"], {
     cwd: root,
     env: {
       ...process.env,
@@ -27,6 +32,9 @@ const start = () =>
     stdout: "pipe",
     stderr: "pipe",
   });
+  children.push(child);
+  return child;
+};
 
 const until = async (ready: () => Promise<boolean>, ms = 10_000) => {
   const deadline = Date.now() + ms;

@@ -58,14 +58,19 @@ export function fakeModel({ brokenEvery = 4 } = {}): LlmModel {
     const topic = (subject || body)
       .replace(/\p{Cc}/gu, " ")
       .split(/[.!?]\s|[.!?]$/)[0]
-      ?.trim();
+      ?.trim()
+      .slice(0, MAX_TOPIC);
     return JSON.stringify({
       category,
       priority,
-      summary: `Customer writes about ${topic || "nothing in particular"}.`,
+      summary: `${SUMMARY_PREFIX}${topic || "nothing in particular"}.`,
     });
   };
 }
+
+const SUMMARY_PREFIX = "Customer writes about ";
+/** The validator allows 500 characters; leave room for the prefix and the final period. */
+const MAX_TOPIC = 500 - SUMMARY_PREFIX.length - 1;
 
 /** The fake reads the ticket the way the prompt presents it: a JSON object after the instruction. */
 function ticketIn(messages: Message[]): { subject: string; body: string } {
