@@ -1,4 +1,5 @@
 import { UNSAFE_CHARS } from "./classifier";
+import { ModelError } from "./model";
 import type { Classification, NewTicket, Ticket, TicketRepo } from "./tickets";
 
 const MAX_BACKOFF_MS = 5 * 60_000;
@@ -7,7 +8,7 @@ const UNSAFE = new RegExp(UNSAFE_CHARS, "gu");
 export type WorkerOptions = {
   concurrency: number;
   maxAttempts: number;
-  /** Base delay; attempt n waits backoffMs * 2^(n-1). */
+  /** Base delay; attempt n waits about backoffMs * 2^(n-1), jittered by ±50%. */
   backoffMs: number;
   pollMs: number;
 };
@@ -63,15 +64,23 @@ export class Worker {
     }
   }
 
-  /** Any failure, from the model or from the store's own checks, counts as one attempt. */
+  /**
+   * Any failure, from the model or from the store's own checks, counts as one attempt. A permanent
+   * provider error (bad key, bad request) fails the ticket at once; otherwise the next attempt waits
+   * for the jittered backoff or for what the provider asked in Retry-After, whichever is longer.
+   */
   private async process(ticket: Ticket): Promise<void> {
     try {
       this.repo.storeClassification(ticket.id, await this.classify(ticket));
       console.log(`classified ${ticket.id}`);
     } catch (err) {
       const attempt = ticket.attempts + 1;
-      const delay = Math.min(this.opts.backoffMs * 2 ** (attempt - 1), MAX_BACKOFF_MS);
-      const retryAt = attempt < this.opts.maxAttempts ? new Date(Date.now() + delay) : null;
+      const permanent = err instanceof ModelError && err.permanent;
+      const asked = err instanceof ModelError ? err.retryAfterMs : 0;
+      const backoff = this.opts.backoffMs * 2 ** (attempt - 1) * (0.5 + Math.random());
+      const delay = Math.min(Math.max(backoff, asked), MAX_BACKOFF_MS);
+      const retryAt =
+        !permanent && attempt < this.opts.maxAttempts ? new Date(Date.now() + delay) : null;
       // Provider text is untrusted: flatten anything that could forge or reshape a log line.
       const message = (err instanceof Error ? err.message : String(err))
         .replace(UNSAFE, " ")

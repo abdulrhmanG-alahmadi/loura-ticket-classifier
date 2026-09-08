@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { openDb } from "../src/db";
+import { ModelError } from "../src/model";
 import { type Classification, TicketRepo } from "../src/tickets";
 import { Worker, type WorkerOptions } from "../src/worker";
 
@@ -23,6 +24,13 @@ beforeEach(() => {
 
 const submit = (id: string) =>
   repo.insertIfAbsent({ id, subject: `subject ${id}`, body: `body ${id}` });
+/** Milliseconds until the ticket is due again. */
+const dueIn = (id: string) =>
+  db
+    .query<{ ms: number }, [string]>(
+      "SELECT (julianday(nextAttemptAt) - julianday('now')) * 86400000 AS ms FROM tickets WHERE id = ?",
+    )
+    .get(id)?.ms ?? Number.NaN;
 
 describe("ingest", () => {
   test("same id twice does not duplicate or overwrite", () => {
@@ -121,6 +129,34 @@ describe("worker", () => {
     await eager.tick();
     expect(repo.get("t-1")).toMatchObject({ status: "failed", attempts: 3, classification: null });
     expect(await eager.tick()).toBe(false);
+  });
+
+  test("a permanent provider error fails at once; Retry-After sets the next attempt", async () => {
+    submit("t-1");
+    const rejected = async () => {
+      throw new ModelError("openrouter 401: bad key", true);
+    };
+    await new Worker(repo, rejected, opts).tick();
+    expect(repo.get("t-1")).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      error: "openrouter 401: bad key",
+    });
+
+    submit("t-2");
+    const throttled = async () => {
+      throw new ModelError("openrouter 429: slow down", false, 60_000);
+    };
+    await new Worker(repo, throttled, opts).tick(); // backoffMs is 0: only Retry-After can delay it
+    expect(repo.get("t-2")).toMatchObject({ status: "pending", attempts: 1 });
+    expect(dueIn("t-2")).toBeGreaterThan(55_000);
+  });
+
+  test("backoff is jittered around the base delay", async () => {
+    submit("t-1");
+    await new Worker(repo, boom, { ...opts, backoffMs: 10_000 }).tick();
+    expect(dueIn("t-1")).toBeGreaterThan(4_000);
+    expect(dueIn("t-1")).toBeLessThan(15_000);
   });
 
   test("provider error text is flattened so it cannot forge log lines", async () => {

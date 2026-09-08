@@ -5,10 +5,34 @@
 export type Message = { role: "system" | "user"; content: string };
 export type LlmModel = (messages: Message[]) => Promise<string>;
 
+/** A provider failure, with the two facts the retry policy needs. */
+export class ModelError extends Error {
+  constructor(
+    message: string,
+    /** The same request will fail the same way (a 4xx other than 408/429): do not retry. */
+    readonly permanent = false,
+    /** How long the provider asked us to wait (Retry-After), or 0 if it did not say. */
+    readonly retryAfterMs = 0,
+  ) {
+    super(message);
+  }
+}
+const permanentStatus = (code: unknown) =>
+  typeof code === "number" && code >= 400 && code < 500 && code !== 408 && code !== 429;
+/** Retry-After is either seconds or an HTTP date. */
+const retryAfterMs = (res: Response) => {
+  const header = res.headers.get("retry-after");
+  if (!header) return 0;
+  const seconds = Number(header);
+  return Number.isFinite(seconds)
+    ? seconds * 1000
+    : Math.max(0, Date.parse(header) - Date.now()) || 0;
+};
+
 /** The parts of OpenRouter's envelope we look at. Everything else is ignored. */
 type Envelope = {
   error?: { code?: unknown; message?: unknown };
-  choices?: { error?: { message?: unknown }; message?: { content?: unknown } }[];
+  choices?: { error?: { code?: unknown; message?: unknown }; message?: { content?: unknown } }[];
 };
 
 export function openRouterModel(opts: {
@@ -23,14 +47,24 @@ export function openRouterModel(opts: {
       body: JSON.stringify({ model: opts.model, messages, temperature: 0, max_tokens: 300 }),
       signal: AbortSignal.timeout(opts.timeoutMs),
     });
-    if (!res.ok) throw new Error(`openrouter ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 200);
+      throw new ModelError(
+        `openrouter ${res.status}: ${detail}`,
+        permanentStatus(res.status),
+        retryAfterMs(res),
+      );
+    }
 
     // The envelope is untrusted too: OpenRouter can answer 200 with an error inside it.
     const data = (await res.json().catch(() => {
       throw new Error("openrouter: response is not JSON");
     })) as Envelope;
     const failure = data?.error ?? data?.choices?.[0]?.error;
-    if (failure) throw new Error(`openrouter: ${String(failure.message ?? "unknown error")}`);
+    if (failure) {
+      const message = `openrouter: ${String(failure.message ?? "unknown error")}`;
+      throw new ModelError(message, permanentStatus(failure.code));
+    }
     const text = data?.choices?.[0]?.message?.content;
     if (typeof text !== "string" || text === "") throw new Error("openrouter: empty response");
     return text;

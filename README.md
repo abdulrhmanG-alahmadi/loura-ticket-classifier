@@ -1,7 +1,7 @@
 # Ticket classifier
 
 A small HTTP service that ingests support tickets, classifies them asynchronously with an LLM,
-and serves the results. Bun + Elysia + SQLite, about 700 lines of source and 820 of tests.
+and serves the results. Bun + Elysia + SQLite, about 750 lines of source and 880 of tests.
 
 ## Run it
 
@@ -126,11 +126,17 @@ overwritten, because the first result never reached the store. Attempts are not 
 this, so a ticket that reliably crashed the process would loop; I accepted that because nothing in
 this code path depends on ticket content.
 
-**Retries: 3 attempts, exponential backoff (1 s, 2 s, capped at 5 min), then `failed`.** Every
-failure counts the same way: transport error, timeout (`LLM_TIMEOUT_MS`, 30 s per call), a 200
-from OpenRouter with an error inside it, or output that fails validation. A model that returns
-garbage once usually does not twice at temperature 0, so retrying on validation failure is worth
-it. `failed` tickets keep their last error and are visible via
+**Retries: 3 attempts, exponential backoff with jitter (about 1 s, then 2 s, ±50%, capped at
+5 min), then `failed`.** Every failure counts as one attempt: transport error, timeout
+(`LLM_TIMEOUT_MS`, 30 s per call), a non-2xx, a 200 from OpenRouter with an error inside it, or
+output that fails validation. Two exceptions to "wait and try again": a permanent provider error (a
+4xx other than 408 and 429, so a bad key or a bad request) fails the ticket on the first attempt,
+because waiting cannot fix it; and when the provider sends `Retry-After`, the next attempt waits
+for that or for the backoff, whichever is longer (still capped at 5 min), rather than burning three
+attempts in three seconds against a rate limit. Validation failures are retried too: a retry costs
+one more call, and OpenRouter may route it to a different upstream provider. I have not measured
+how often that helps (in 134 live calls no output failed validation), so it is a cheap bet, not an
+established fact. `failed` tickets keep their last error and are visible via
 `GET /v1/tickets?status=failed`. There is no re-classify endpoint yet (see below).
 
 **Validation: parse, normalise, check, or reject.** `parseClassification` cuts from the first `{`
@@ -208,7 +214,7 @@ the restart path above covers whatever was in flight.
 
 ## Tests
 
-`bun test` runs 99 tests in about a second. `classifier` covers the parse/validate door with
+`bun test` runs 102 tests in about a second. `classifier` covers the parse/validate door with
 good, wrapped, and broken model output, plus the real t-1005; `model` stubs `fetch` to cover
 OpenRouter's envelopes and checks the fake against the samples; `lifecycle` covers the state
 machine, claiming, retries, restart, drain, and the database's own constraints, all on in-memory
@@ -224,8 +230,6 @@ on purpose.
 - `POST /v1/tickets/:id/reclassify` plus a `promptVersion` column, so failed tickets and tickets
   classified under an old prompt can be redone.
 - Wake the worker on insert instead of polling.
-- Distinguish permanent provider errors (4xx) from transient ones (429/5xx/timeout) and skip the
-  retries for the former.
 - A labelled evaluation set; with a live model, t-1005 and t-1009 (two topics in one ticket) are
   the ones I would watch.
 - Request ids in logs and responses, and authentication. Today the service assumes it sits on a

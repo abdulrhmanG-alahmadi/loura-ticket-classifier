@@ -1,21 +1,26 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import samples from "../data/tickets.json";
 import { buildMessages, InvalidModelOutput, parseClassification } from "../src/classifier";
-import { fakeModel, openRouterModel } from "../src/model";
+import { fakeModel, ModelError, openRouterModel } from "../src/model";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
 });
 let lastInit: RequestInit | undefined;
-const respond = (status: number, body: unknown) => {
+const respond = (status: number, body: unknown, headers?: Record<string, string>) => {
   globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
     lastInit = init;
     return typeof body === "string"
-      ? new Response(body, { status })
-      : Response.json(body, { status });
+      ? new Response(body, { status, headers })
+      : Response.json(body, { status, headers });
   }) as unknown as typeof fetch;
 };
+const failure = () =>
+  model(messages).then(
+    () => "resolved",
+    (e: unknown) => e,
+  );
 const model = openRouterModel({ apiKey: "k", model: "m", timeoutMs: 1000 });
 const messages = [{ role: "user" as const, content: "hi" }];
 
@@ -46,6 +51,27 @@ describe("openRouterModel", () => {
   ])("rejects %s", async (_name, status, body, pattern) => {
     respond(status, body);
     await expect(model(messages)).rejects.toThrow(pattern);
+  });
+
+  test("says whether waiting can help: 4xx is permanent, Retry-After is carried", async () => {
+    respond(401, { error: { message: "bad key" } });
+    const bad = await failure();
+    expect(bad).toBeInstanceOf(ModelError);
+    expect(bad).toMatchObject({ permanent: true, retryAfterMs: 0 });
+
+    respond(429, { error: { message: "slow down" } }, { "Retry-After": "60" });
+    expect(await failure()).toMatchObject({ permanent: false, retryAfterMs: 60_000 });
+
+    respond(503, "busy", { "Retry-After": new Date(Date.now() + 30_000).toUTCString() });
+    const dated = (await failure()) as ModelError;
+    expect(dated.permanent).toBe(false);
+    expect(dated.retryAfterMs).toBeGreaterThan(25_000);
+    expect(dated.retryAfterMs).toBeLessThanOrEqual(30_000);
+
+    respond(200, { error: { code: 400, message: "bad request" } });
+    expect(await failure()).toMatchObject({ permanent: true });
+    respond(200, { error: { code: 502, message: "provider down" } });
+    expect(await failure()).toMatchObject({ permanent: false });
   });
 });
 
