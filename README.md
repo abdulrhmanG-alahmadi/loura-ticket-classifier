@@ -14,7 +14,8 @@ bun run seed         # in another terminal: loads the 10 sample tickets through 
 bun test
 ```
 
-Interactive API docs are at <http://localhost:3000/openapi> (spec at `/openapi/json`).
+Interactive API docs are at <http://localhost:3000/openapi> (spec at `/openapi/json`), generated
+from the same schemas that validate requests and responses.
 With no `OPENROUTER_API_KEY` the service uses a built-in fake model (see below). To use a real
 model, copy `.env.example` to `.env` and set the key; `OPENROUTER_API_KEY= bun run dev` forces the
 fake even if your shell has a key. `bun run seed [baseUrl]` targets another host. Delete
@@ -81,14 +82,14 @@ nothing now and saves a migration later.
 ```
 src/
   app.ts         HTTP routes, error envelope, OpenAPI
-  tickets.ts     schemas, types, and every SQL statement (TicketRepo)
+  tickets.ts     request/response schemas, types, and every SQL statement (TicketRepo)
   db.ts          SQLite schema; CHECK constraints mirror the allowed sets
   worker.ts      claim → classify → store loop, retries, drain on stop
   classifier.ts  the model boundary: prompt, parse, validate
   model.ts       "messages in, text out": OpenRouter client and the fake
   config.ts      environment variables
   index.ts       wiring and graceful shutdown
-tests/           one file per concern: classifier, model, lifecycle (repo + worker), app (HTTP)
+tests/           one file per concern: classifier, model, lifecycle, app (HTTP), service (real process)
 data/            sample tickets (loaded by scripts/seed.ts) and the SQLite file
 ```
 
@@ -136,9 +137,10 @@ the two enum fields, drops unknown keys, then checks the result against the same
 types the API. Anything else throws `InvalidModelOutput` and counts as a failed attempt. Nothing that
 is not a `Classification` can reach `storeClassification`, and the database re-checks the enums.
 "One sentence" is part of the contract, so it is enforced too: a summary containing a sentence
-terminator followed by more text, or a line break, is rejected like a bad enum. The check is a
-heuristic (decimals and version numbers pass; "Mr. Smith" would not), which I accept because the
-model is asked for exactly one sentence and a false positive costs a retry, not data.
+terminator followed by more text, or any control character, is rejected like a bad enum. The check
+is a heuristic (decimals and version numbers pass; "Mr. Smith" would not), which I accept because
+the model is asked for exactly one sentence and a false positive costs a retry, not data. The
+stored `error` text is capped at 500 characters.
 
 **Prompt injection.** Three layers, in order of how much I trust them:
 
@@ -158,12 +160,13 @@ t-1005 came back as billing with a summary about downloading invoices, but I wou
 
 **Model: OpenRouter if a key is set, otherwise a fake.** `model.ts` knows nothing about tickets: it
 is `messages → string`, with a timeout, and it type-checks the provider's envelope before trusting
-it (OpenRouter can return an error inside a 200). The fake uses keyword heuristics and returns a
-broken response every 4th call (prose, wrong enums, truncated JSON, in rotation) so the retry path
-is exercised locally; with the default 3 attempts the seed run shows retries but rarely a `failed`
-ticket. Being keyword-based, the fake is steered by t-1005 exactly as a naive model would be
-("URGENT" makes it high, "refund" and "invoices" make it billing), which is a fair reminder that
-the prompt is the weakest of the three layers above.
+it (OpenRouter can return an error inside a 200). The fake reads the ticket out of the prompt,
+picks the category whose keyword appears earliest (so the subject outweighs an aside in the body),
+summarises the subject line, and returns a broken response every 4th call (prose, wrong enums,
+truncated JSON, in rotation) so the retry path is exercised locally; with the default 3 attempts
+the seed run shows retries but rarely a `failed` ticket. Being keyword-based, the fake is steered
+by t-1005 exactly as a naive model would be ("URGENT" makes it high, "refund" makes it billing),
+which is a fair reminder that the prompt is the weakest of the three layers above.
 
 **Graceful shutdown (the optional extra I picked).** On `SIGINT`/`SIGTERM` the workers stop
 claiming and the server stops accepting at the same moment; then in-flight requests complete, the
@@ -173,13 +176,15 @@ covers whatever was in flight.
 
 ## Tests
 
-`bun test` runs 71 tests in about 200 ms against in-memory SQLite, no ports. `classifier` covers
-the parse/validate door with good, wrapped, and broken model output; `model` stubs `fetch` to cover
-OpenRouter's envelopes and the fake's cadence; `lifecycle` covers the state machine, claiming,
-retries, restart, drain, and the database's own constraints; `app` drives the routes through
-`app.handle` (and one real socket for the 413 cap). Not under test: the eight lines of wiring and
-signal handling in `index.ts`, and `config.ts`. Console output is silenced during tests
-(`tests/setup.ts`) because the worker and error hook log on purpose.
+`bun test` runs 77 tests in under a second. `classifier` covers the parse/validate door with
+good, wrapped, and broken model output, plus the real t-1005; `model` stubs `fetch` to cover
+OpenRouter's envelopes and checks the fake against the samples; `lifecycle` covers the state
+machine, claiming, retries, restart, drain, and the database's own constraints, all on in-memory
+SQLite; `app` drives the routes through `app.handle` (and one real socket for the 413 cap);
+`service` spawns the real `src/index.ts`, ingests, waits for classification, sends SIGTERM,
+plants a `classifying` row and boots again to see it recovered. Not under test: `config.ts`.
+Console output is silenced during tests (`tests/setup.ts`) because the worker and error hook log
+on purpose.
 
 ## With more time
 

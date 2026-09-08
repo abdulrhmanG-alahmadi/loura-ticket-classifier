@@ -1,6 +1,6 @@
 import { openapi } from "@elysiajs/openapi";
 import { Elysia } from "elysia";
-import { ListQuery, NewTicket, type TicketRepo } from "./tickets";
+import { ErrorBody, ListQuery, NewTicket, Page, Ticket, type TicketRepo } from "./tickets";
 
 const notFound = (message: string) => ({ error: { code: "not_found", message } });
 
@@ -47,6 +47,7 @@ export function createApp(repo: TicketRepo) {
             },
             {
               body: NewTicket,
+              response: { 200: Ticket, 201: Ticket, 400: ErrorBody, 422: ErrorBody },
               detail: {
                 summary: "Ingest a ticket",
                 description:
@@ -59,11 +60,13 @@ export function createApp(repo: TicketRepo) {
             ({ params, status }) =>
               repo.get(params.id) ?? status(404, notFound("ticket not found")),
             {
+              response: { 200: Ticket, 404: ErrorBody },
               detail: { summary: "Fetch one ticket" },
             },
           )
           .get("/tickets", ({ query }) => repo.list(query), {
             query: ListQuery,
+            response: { 200: Page, 422: ErrorBody },
             detail: { summary: "List tickets, filtered and paginated, newest first" },
           }),
       )

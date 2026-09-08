@@ -25,8 +25,8 @@ export function buildMessages({ subject, body }: NewTicket): Message[] {
 
 export class InvalidModelOutput extends Error {}
 
-/** A terminator followed by more text, or a line break, means more than one sentence. */
-const MORE_THAN_ONE_SENTENCE = /[.!?]\s+\S|\n/;
+/** A terminator followed by more text is a second sentence; control characters include line breaks. */
+const NOT_ONE_CLEAN_SENTENCE = /[.!?]\s+\S|\p{Cc}/u;
 
 /**
  * Text → Classification, or throw. Tolerates prose around the JSON and enum casing;
@@ -50,8 +50,8 @@ export function parseClassification(text: string): Classification {
     const first = Value.Errors(Classification, candidate).First();
     throw new InvalidModelOutput(`${first?.path || "/"}: ${first?.message}`);
   }
-  if (MORE_THAN_ONE_SENTENCE.test(candidate.summary)) {
-    throw new InvalidModelOutput("/summary: must be a single sentence");
+  if (NOT_ONE_CLEAN_SENTENCE.test(candidate.summary)) {
+    throw new InvalidModelOutput("/summary: must be one sentence with no control characters");
   }
   return candidate;
 }

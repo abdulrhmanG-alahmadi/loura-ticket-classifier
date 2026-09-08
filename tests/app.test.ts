@@ -43,6 +43,13 @@ describe("POST /tickets", () => {
     }
   });
 
+  test("concurrent submissions of one id create it exactly once", async () => {
+    const responses = await Promise.all(Array.from({ length: 20 }, () => post(sample)));
+    expect(responses.filter((r) => r.status === 201)).toHaveLength(1);
+    expect(responses.filter((r) => r.status === 200)).toHaveLength(19);
+    expect((await json(get("/tickets"))).total).toBe(1);
+  });
+
   test("is idempotent on id", async () => {
     await post(sample);
     const res = await post({ ...sample, subject: "different" });

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { InvalidModelOutput, parseClassification } from "../src/classifier";
+import samples from "../data/tickets.json";
+import { buildMessages, InvalidModelOutput, parseClassification } from "../src/classifier";
 import { fakeModel, openRouterModel } from "../src/model";
 
 const realFetch = globalThis.fetch;
@@ -49,6 +50,33 @@ describe("openRouterModel", () => {
 });
 
 describe("fakeModel", () => {
+  const sample = (id: string) => {
+    const t = samples.find((s) => s.id === id);
+    if (!t) throw new Error(`no sample ${id}`);
+    return buildMessages(t);
+  };
+
+  test("reads the subject first, so an aside in the body does not win", async () => {
+    const fake = fakeModel({ brokenEvery: 1000 });
+    expect(JSON.parse(await fake(sample("t-1009")))).toMatchObject({ category: "technical" });
+    expect(JSON.parse(await fake(sample("t-1001")))).toMatchObject({
+      category: "billing",
+      priority: "medium",
+    });
+    expect(JSON.parse(await fake(sample("t-1003")))).toMatchObject({
+      category: "technical",
+      priority: "high",
+    });
+  });
+
+  test("its good answers always pass the real validator, even for an empty subject", async () => {
+    const fake = fakeModel({ brokenEvery: 1000 });
+    for (const t of samples) {
+      const { summary } = parseClassification(await fake(buildMessages(t)));
+      expect(summary).toMatch(/^Customer writes about .+\.$/);
+    }
+  });
+
   test("classifies by keyword and breaks on a fixed cadence", async () => {
     const fake = fakeModel({ brokenEvery: 3 });
     const ask = (body: string) => fake([{ role: "user", content: body }]);

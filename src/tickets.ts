@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import type { TLiteral, TUnion } from "@sinclair/typebox";
 import { t } from "elysia";
 
 const CATEGORIES = ["billing", "technical", "account", "other"] as const;
@@ -9,15 +10,19 @@ type Category = (typeof CATEGORIES)[number];
 type Priority = (typeof PRIORITIES)[number];
 type Status = (typeof STATUSES)[number];
 
+type Literals<T extends readonly string[]> = { -readonly [K in keyof T]: TLiteral<T[K]> };
+
 /**
  * A union of literals rather than Elysia's `t.UnionEnum`: the latter, when optional in a query,
  * silently defaults an absent param to its first value (so every list was filtered to "billing").
+ * The explicit tuple type keeps the literal union through Elysia's response-schema inference,
+ * which collapses `TLiteral<A | B>[]` to `never`.
  */
-const oneOf = <const T extends readonly string[]>(values: T) =>
+const oneOf = <const T extends readonly string[]>(values: T): TUnion<Literals<T>> =>
   t.Union(
-    values.map((v) => t.Literal<T[number]>(v)),
+    values.map((v) => t.Literal(v)),
     { error: `must be one of: ${values.join(", ")}` },
-  );
+  ) as unknown as TUnion<Literals<T>>;
 
 /** What the model must produce. Also the only shape that may reach the store. */
 export const Classification = t.Object({
@@ -66,16 +71,32 @@ export const ListQuery = t.Object({
 });
 export type ListQuery = typeof ListQuery.static;
 
-export type Ticket = NewTicket & {
-  status: Status;
-  classification: Classification | null;
-  attempts: number;
-  error: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
+export const Ticket = t.Object({
+  ...NewTicket.properties,
+  status: oneOf(STATUSES),
+  classification: t.Nullable(Classification),
+  attempts: t.Integer(),
+  error: t.Nullable(t.String()),
+  createdAt: t.String(),
+  updatedAt: t.String(),
+});
+export type Ticket = typeof Ticket.static;
 
-type Page<T> = { items: T[]; total: number; limit: number; offset: number };
+export const Page = t.Object({
+  items: t.Array(Ticket),
+  total: t.Integer(),
+  limit: t.Integer(),
+  offset: t.Integer(),
+});
+export type Page = typeof Page.static;
+
+export const ErrorBody = t.Object({
+  error: t.Object({
+    code: t.String(),
+    message: t.String(),
+    details: t.Optional(t.Array(t.Object({ path: t.String(), message: t.String() }))),
+  }),
+});
 
 type Row = NewTicket & {
   status: Status;
@@ -120,7 +141,7 @@ export class TicketRepo {
     return row && toTicket(row);
   }
 
-  list({ category, priority, status, limit = DEFAULT_LIMIT, offset = 0 }: ListQuery): Page<Ticket> {
+  list({ category, priority, status, limit = DEFAULT_LIMIT, offset = 0 }: ListQuery): Page {
     const where = `WHERE ($category IS NULL OR category = $category)
                      AND ($priority IS NULL OR priority = $priority)
                      AND ($status IS NULL OR status = $status)`;

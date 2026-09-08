@@ -45,23 +45,52 @@ export function fakeModel({ brokenEvery = 4 } = {}): LlmModel {
   let calls = 0;
   return async (messages) => {
     calls += 1;
-    const text = messages.at(-1)?.content.toLowerCase() ?? "";
     if (calls % brokenEvery === 0) return BROKEN[(calls / brokenEvery) % BROKEN.length] ?? "";
 
-    const category = /charge|refund|invoice|billing|overcharg/.test(text)
-      ? "billing"
-      : /log ?in|password|email|account|profile/.test(text)
-        ? "account"
-        : /error|500|timeout|api|upload|export|broken|bug/.test(text)
-          ? "technical"
-          : "other";
+    const { subject, body } = ticketIn(messages);
+    const text = `${subject}\n${body}`.toLowerCase();
+    const category = earliestMatch(text, CATEGORY_HINTS) ?? "other";
     const priority = /not urgent|nice to have|feature request/.test(text)
       ? "low"
       : /urgent|blocking|production|outage|500/.test(text)
         ? "high"
         : "medium";
-    return JSON.stringify({ category, priority, summary: `Customer reports a ${category} issue.` });
+    const topic = (subject || body)
+      .replace(/\p{Cc}/gu, " ")
+      .split(/[.!?]\s|[.!?]$/)[0]
+      ?.trim();
+    return JSON.stringify({
+      category,
+      priority,
+      summary: `Customer writes about ${topic || "nothing in particular"}.`,
+    });
   };
+}
+
+/** The fake reads the ticket the way the prompt presents it: a JSON object after the instruction. */
+function ticketIn(messages: Message[]): { subject: string; body: string } {
+  const content = messages.at(-1)?.content ?? "";
+  try {
+    return JSON.parse(content.slice(content.indexOf("{")));
+  } catch {
+    return { subject: "", body: content };
+  }
+}
+
+const CATEGORY_HINTS: [RegExp, string][] = [
+  [/charge|refund|invoice|billing|overcharg/, "billing"],
+  [/log ?in|password|email|account|profile/, "account"],
+  [/error|500|timeout|api|upload|export|broken|bug/, "technical"],
+];
+
+/** Earliest hit wins, so the subject line outweighs an aside in the body. */
+function earliestMatch(text: string, hints: [RegExp, string][]): string | undefined {
+  let best: { at: number; value: string } | undefined;
+  for (const [pattern, value] of hints) {
+    const at = text.search(pattern);
+    if (at !== -1 && (!best || at < best.at)) best = { at, value };
+  }
+  return best?.value;
 }
 
 const BROKEN = [
