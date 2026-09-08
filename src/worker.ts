@@ -1,6 +1,8 @@
+import { UNSAFE_CHARS } from "./classifier";
 import type { Classification, NewTicket, Ticket, TicketRepo } from "./tickets";
 
 const MAX_BACKOFF_MS = 5 * 60_000;
+const UNSAFE = new RegExp(UNSAFE_CHARS, "gu");
 
 export type WorkerOptions = {
   concurrency: number;
@@ -70,9 +72,9 @@ export class Worker {
       const attempt = ticket.attempts + 1;
       const delay = Math.min(this.opts.backoffMs * 2 ** (attempt - 1), MAX_BACKOFF_MS);
       const retryAt = attempt < this.opts.maxAttempts ? new Date(Date.now() + delay) : null;
-      // Provider text is untrusted: flatten control characters so it cannot forge log lines.
+      // Provider text is untrusted: flatten anything that could forge or reshape a log line.
       const message = (err instanceof Error ? err.message : String(err))
-        .replace(/\p{Cc}/gu, " ")
+        .replace(UNSAFE, " ")
         .slice(0, 500);
       this.repo.recordFailure(ticket.id, message, retryAt);
       const outcome = retryAt ? `retry at ${retryAt.toISOString()}` : "giving up";

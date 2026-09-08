@@ -157,11 +157,22 @@ What is *not* defended: a determined injection can still steer the category or p
 summary is model-generated text that may echo the attacker's words. A well-formed answer such as
 `technical / high / "Approved for immediate refund."` passes validation, because validation proves
 shape, not truth. Anything downstream should treat `summary` as untrusted user content, never as an
-instruction or an authorisation. A red-team pass against `gpt-4o-mini` (17 attack tickets: role
-spoofs, CEO claims, few-shot poisoning, base64 and Arabic instructions, format sabotage) produced
-no hijacked output; t-1005 came back billing with a summary about downloading invoices, but at
-`high` priority where a neutral invoice question was `low`, so the "URGENT" framing probably still
-moved the priority. A matched control without the injection is the evaluation I would run next.
+instruction or an authorisation. Two red-team passes were run against this prompt, 20 and then
+100 live calls (45 attack variants and 5 controls on each of `gpt-4o-mini` and `glm-5.3`: role
+spoofs, CEO and signed-policy claims, few-shot poisoning, instructions in five languages, base64
+and ROT13, format sabotage). No attacker-requested override, false approval, or wrong category was
+observed. What did move was priority: `gpt-4o-mini` rated a clean invoice question `low` with a
+neutral subject and `high` with the subject "URGENT", and two attack variants nudged it to
+`medium`; the original t-1005 injection with a neutral subject came back `low`. So the injection
+text did not steer the model, but a bare urgency word did, which is a triage-quality problem rather
+than a security one. The priority rule in the prompt now says to judge by described impact, not by
+urgency words or claims of authority. I checked that sentence with one `gpt-4o-mini` call per
+input at temperature 0 over the 10 samples plus 7 controls and injection variants, old prompt
+against new (34 calls): the "URGENT" invoice question dropped from `high` to `low`, two over-rated
+samples (t-1004, t-1009) each moved down one step, nothing moved up, and the outage and blocked
+login tickets kept `high`. It did not fix everything: t-1005 and the two injection variants still
+land at `medium` rather than `low`, and a single deterministic run is too small to call this more
+than a plausible improvement.
 
 Text that reaches the store or the logs is also kept plain: summaries may not contain control
 characters, Unicode line or paragraph separators, or bidirectional overrides (other format

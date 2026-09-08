@@ -126,11 +126,13 @@ describe("worker", () => {
   test("provider error text is flattened so it cannot forge log lines", async () => {
     submit("t-1");
     const hostile = async () => {
-      throw new Error("openrouter 502: gateway\nclassified victim\n\u001b[2J");
+      throw new Error(
+        "openrouter 502: gateway\nclassified victim\n\u001b[2J\u2028FORGED\u202eREVERSED",
+      );
     };
     await new Worker(repo, hostile, { ...opts, maxAttempts: 1 }).tick();
     const stored = repo.get("t-1")?.error ?? "";
-    expect(stored).not.toMatch(/[\p{Cc}]/u);
+    expect(stored).not.toMatch(/[\p{Cc}\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069]/u);
     expect(stored).toContain("classified victim"); // still readable, just not on its own line
   });
 
