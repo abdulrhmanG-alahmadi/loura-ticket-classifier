@@ -137,8 +137,9 @@ than burning three attempts in three seconds against a rate limit. Only our own 
 the provider's ask is honoured in full, because retrying sooner is a guaranteed failure.
 Validation failures are retried too: a retry costs one more call, and OpenRouter may route it to a
 different upstream provider. I have not measured how often that helps (in 134 live calls no output
-failed validation), so it is a cheap bet, not an established fact. `failed` tickets keep their last error and are visible via
-`GET /v1/tickets?status=failed`. There is no re-classify endpoint yet (see below).
+failed validation), so it is a cheap bet, not an established fact. `failed` tickets keep their last
+error and are visible via `GET /v1/tickets?status=failed`. There is no re-classify endpoint yet
+(see below).
 
 **Validation: parse, normalise, check, or reject.** `parseClassification` cuts from the first `{`
 to the last `}` (models like to add prose and code fences), `JSON.parse`s it, lower-cases and trims
