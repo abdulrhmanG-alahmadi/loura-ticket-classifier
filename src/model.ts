@@ -57,9 +57,10 @@ export function fakeModel({ brokenEvery = 4 } = {}): LlmModel {
         : "medium";
     const topic = (subject || body)
       .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
-      .split(/[.!?]\s|[.!?]$/)[0]
+      .split(/[.!?؟]\s|[。！？]|[.!?؟]$/)[0]
       ?.trim()
-      .slice(0, MAX_TOPIC);
+      .slice(0, MAX_TOPIC)
+      .replace(/\p{Cs}$/u, ""); // never end on half a surrogate pair
     return JSON.stringify({
       category,
       priority,

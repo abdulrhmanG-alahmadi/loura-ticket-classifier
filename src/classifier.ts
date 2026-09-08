@@ -33,8 +33,16 @@ export class InvalidModelOutput extends Error {}
  */
 export const UNSAFE_CHARS = "[\\p{Cc}\\p{Zl}\\p{Zp}\\u202A-\\u202E\\u2066-\\u2069]";
 
-/** A terminator followed by more text is a second sentence. */
-const NOT_ONE_CLEAN_SENTENCE = new RegExp(`[.!?]\\s+\\S|${UNSAFE_CHARS}`, "u");
+/**
+ * A terminator followed by more text is a second sentence. CJK terminators need no space, but a
+ * closing quote or bracket after one (「なぜ？」) is still the same sentence, so require a letter/digit.
+ */
+const NOT_ONE_CLEAN_SENTENCE = new RegExp(
+  `[.!?؟]\\s+\\S|[。！？]\\s*[\\p{L}\\p{N}]|${UNSAFE_CHARS}`,
+  "u",
+);
+/** At least one character that is not whitespace or an invisible format character. */
+const VISIBLE = /[^\s\p{Cf}]/u;
 
 /**
  * Text → Classification, or throw. Tolerates prose around the JSON and enum casing;
@@ -58,9 +66,9 @@ export function parseClassification(text: string): Classification {
     const first = Value.Errors(Classification, candidate).First();
     throw new InvalidModelOutput(`${first?.path || "/"}: ${first?.message}`);
   }
-  if (NOT_ONE_CLEAN_SENTENCE.test(candidate.summary)) {
+  if (NOT_ONE_CLEAN_SENTENCE.test(candidate.summary) || !VISIBLE.test(candidate.summary)) {
     throw new InvalidModelOutput(
-      "/summary: must be one sentence with no control or bidi characters",
+      "/summary: must be one visible sentence with no control or bidi characters",
     );
   }
   return candidate;

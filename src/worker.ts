@@ -75,7 +75,8 @@ export class Worker {
       // Provider text is untrusted: flatten anything that could forge or reshape a log line.
       const message = (err instanceof Error ? err.message : String(err))
         .replace(UNSAFE, " ")
-        .slice(0, 500);
+        .slice(0, 500)
+        .replace(/\p{Cs}$/u, ""); // never end on half a surrogate pair
       this.repo.recordFailure(ticket.id, message, retryAt);
       const outcome = retryAt ? `retry at ${retryAt.toISOString()}` : "giving up";
       console.warn(`attempt ${attempt} failed for ${ticket.id} (${message}), ${outcome}`);

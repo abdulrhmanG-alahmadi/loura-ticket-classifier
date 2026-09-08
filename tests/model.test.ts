@@ -105,10 +105,14 @@ describe("fakeModel", () => {
       "an empty subject and the longest allowed body",
       { id: "x", subject: "", body: "w".repeat(20_000) },
     ],
+    ["an emoji straddling the cut", { id: "x", subject: `${"x".repeat(476)}😀`, body: "" }],
+    ["a Chinese subject", { id: "x", subject: "客户无法登录。密码重置无效。", body: "" }],
+    ["an Arabic subject", { id: "x", subject: "لماذا تم خصم المبلغ؟ أريد استرداد", body: "" }],
   ])("keeps the summary inside the 500-character contract for %s", async (_name, ticket) => {
     const fake = fakeModel({ brokenEvery: 1000 });
     const { summary } = parseClassification(await fake(buildMessages(ticket)));
     expect(summary.length).toBeLessThanOrEqual(500);
+    expect(summary.isWellFormed()).toBe(true);
   });
 
   test("classifies by keyword and breaks on a fixed cadence", async () => {

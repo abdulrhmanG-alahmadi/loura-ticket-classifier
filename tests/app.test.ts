@@ -117,6 +117,25 @@ describe("GET /tickets/:id", () => {
   });
 });
 
+test("rejects ill-formed text before it can reach the store, keeps well-formed text intact", async () => {
+  // A lone surrogate survives JSON but not the SQLite round trip; the row would then be unreadable.
+  const res = await post({ ...sample, subject: "half \ud800 emoji" });
+  expect(res.status).toBe(422);
+  expect((await json(res)).error.details[0].path).toBe("/subject");
+  expect((await get("/tickets/t-1")).status).toBe(404);
+
+  const emoji = { id: "t-2", subject: "Charged twice 😀", body: "مشتری می\u200Cخواهد" };
+  expect((await post(emoji)).status).toBe(201);
+  expect(await json(get("/tickets/t-2"))).toMatchObject(emoji);
+});
+
+test("a response that fails its own schema is an internal error, not the client's", async () => {
+  repo.get = () => ({ id: "t-1", subject: "s".repeat(501) }) as never;
+  const res = await get("/tickets/t-1");
+  expect(res.status).toBe(500);
+  expect(await json(res)).toEqual({ error: { code: "internal", message: "internal error" } });
+});
+
 test("unknown routes and internal errors use the same error envelope", async () => {
   const missing = await get("/nope");
   expect(missing.status).toBe(404);
@@ -129,9 +148,11 @@ test("unknown routes and internal errors use the same error envelope", async () 
   expect(await json(res)).toEqual({ error: { code: "internal", message: "internal error" } });
 });
 
-test("serves an OpenAPI description of the routes", async () => {
+test("serves an OpenAPI description of the routes with numeric fields as numbers", async () => {
   const spec = await json(app.handle(new Request("http://localhost/openapi/json")));
   expect(Object.keys(spec.paths).sort()).toEqual(["/v1/tickets", "/v1/tickets/{id}"]);
+  const page = spec.paths["/v1/tickets"].get.responses["200"].content["application/json"].schema;
+  expect(page.properties.total).toEqual({ type: "integer" });
 });
 
 describe("GET /tickets", () => {

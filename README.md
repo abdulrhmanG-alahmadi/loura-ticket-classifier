@@ -1,7 +1,7 @@
 # Ticket classifier
 
 A small HTTP service that ingests support tickets, classifies them asynchronously with an LLM,
-and serves the results. Bun + Elysia + SQLite, about 670 lines of source and 770 of tests.
+and serves the results. Bun + Elysia + SQLite, about 700 lines of source and 820 of tests.
 
 ## Run it
 
@@ -26,7 +26,7 @@ answers land as `failed` tickets instead of retries. `bun run check` runs Biome 
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `POST` | `/v1/tickets` | Body `{ id, subject, body }`. `id` is 1–100 chars of letters, digits, `. _ : @ -`, starting with a letter or digit, so it survives a URL. `201` + `Location` on create, `200` with the stored ticket if the id was seen before. |
+| `POST` | `/v1/tickets` | Body `{ id, subject, body }`. `id` is 1–100 chars of letters, digits, `. _ : @ -`, starting with a letter or digit, so it survives a URL. `subject` (up to 500 chars) and `body` (up to 20,000) must be well-formed text (a lone UTF-16 surrogate is a 422, because the SQLite driver would rewrite it). `201` + `Location` on create, `200` with the stored ticket if the id was seen before. |
 | `GET` | `/v1/tickets/:id` | `404` if unknown. |
 | `GET` | `/v1/tickets` | Filters `category`, `priority`, `status`; `limit` (1–100, default 20) and `offset`. Returns `{ items, total, limit, offset }`, newest first. |
 
@@ -67,8 +67,9 @@ has the same shape:
 ```
 
 with codes `bad_request` (400, unparseable JSON), `validation` (422), `not_found` (404) and
-`internal` (500, message never leaks). The one exception is size: bodies over 64 KB get Bun's
-bare 413 at the transport, before any of this code runs.
+`internal` (500, message never leaks; a response that fails its own schema is also a 500, since
+that is the server's fault, not the caller's). The one exception is size: bodies over 64 KB get
+Bun's bare 413 at the transport, before any of this code runs.
 
 Shape choices worth defending: `POST` returns `201`, not `202`, because the ticket resource exists
 immediately; only its classification is pending, and `status` says so. A repeated id returns `200`
@@ -138,10 +139,11 @@ the two enum fields, drops unknown keys, then checks the result against the same
 types the API. Anything else throws `InvalidModelOutput` and counts as a failed attempt. Nothing that
 is not a `Classification` can reach `storeClassification`, and the database re-checks the enums.
 "One sentence" is part of the contract, so it is enforced too: a summary containing a sentence
-terminator followed by more text, or any control character, is rejected like a bad enum. The check
-is a heuristic (decimals and version numbers pass; "Mr. Smith" would not), which I accept because
-the model is asked for exactly one sentence and a false positive costs a retry, not data. The
-stored `error` text is capped at 500 characters.
+terminator followed by more text (Latin, Arabic and CJK terminators), any control character, a lone
+surrogate, or nothing but whitespace and format characters, is rejected like a bad enum. The sentence check is a heuristic
+(decimals and version numbers pass; "Mr. Smith" would not), which I accept because the model is
+asked for exactly one sentence and a false positive costs a retry, not data. The stored `error`
+text is capped at 500 characters.
 
 **Prompt injection.** Three layers, in order of how much I trust them:
 
@@ -167,7 +169,7 @@ from the matched control. Priority did move, on `gpt-4o-mini` only: it rated a c
 question `low` with a neutral subject and `high` with the subject "URGENT", and two attack variants
 moved the same question from `low` to `medium` against its control; the original t-1005 injection
 with a neutral subject came back `low`. So the CEO text on its own did not steer the model, but a
-bare urgency word did, and two attack bodies shifted priority one step, which is a triage-quality
+bare urgency word did, and two attack variants shifted priority one step, which is a triage-quality
 problem rather than a security one. The priority rule in the prompt now says to judge by described
 impact, not by urgency words or claims of authority. I checked that sentence with one `gpt-4o-mini`
 call per input at temperature 0 over the 10 samples plus 7 controls and injection variants, old
@@ -206,7 +208,7 @@ the restart path above covers whatever was in flight.
 
 ## Tests
 
-`bun test` runs 85 tests in about a second. `classifier` covers the parse/validate door with
+`bun test` runs 99 tests in about a second. `classifier` covers the parse/validate door with
 good, wrapped, and broken model output, plus the real t-1005; `model` stubs `fetch` to cover
 OpenRouter's envelopes and checks the fake against the samples; `lifecycle` covers the state
 machine, claiming, retries, restart, drain, and the database's own constraints, all on in-memory
@@ -239,7 +241,9 @@ on purpose.
   index is the fix when it matters.
 - Case-normalising enums is a leniency I chose deliberately; a purist would reject `"Billing"`.
 - The one-sentence check is a regex. It cannot tell an abbreviation from a sentence end, so a
-  summary like "Mr. Smith was charged twice." is rejected and retried.
+  summary like "Mr. Smith was charged twice." is rejected and retried; and it needs whitespace after
+  a Latin or Arabic terminator, so "Cannot log in.Reset fails." slips through, because requiring
+  none would reject decimals and domain names.
 - Elysia quirk worth knowing: an optional `t.UnionEnum` in a query schema silently defaults to the
   enum's first value, which turned every unfiltered list into `category=billing` until a test caught
   it. `tickets.ts` uses a union of literals instead.

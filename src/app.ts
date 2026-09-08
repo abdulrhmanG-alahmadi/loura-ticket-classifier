@@ -9,7 +9,7 @@ export function createApp(repo: TicketRepo) {
     new Elysia({ serve: { maxRequestBodySize: 64 * 1024 } })
       // One error shape for every failure; internal messages stay in the log.
       .onError(({ code, error, status }) => {
-        if (code === "VALIDATION") {
+        if (code === "VALIDATION" && error.type !== "response") {
           // Prefer the message declared on the schema (see `oneOf`); fall back to Elysia's summary.
           const details = error.all.map((e) => ({
             path: e.path,
@@ -47,7 +47,13 @@ export function createApp(repo: TicketRepo) {
             },
             {
               body: NewTicket,
-              response: { 200: Ticket, 201: Ticket, 400: ErrorBody, 422: ErrorBody },
+              response: {
+                200: Ticket,
+                201: Ticket,
+                400: ErrorBody,
+                422: ErrorBody,
+                500: ErrorBody,
+              },
               detail: {
                 summary: "Ingest a ticket",
                 description:
@@ -60,13 +66,13 @@ export function createApp(repo: TicketRepo) {
             ({ params, status }) =>
               repo.get(params.id) ?? status(404, notFound("ticket not found")),
             {
-              response: { 200: Ticket, 404: ErrorBody },
+              response: { 200: Ticket, 404: ErrorBody, 500: ErrorBody },
               detail: { summary: "Fetch one ticket" },
             },
           )
           .get("/tickets", ({ query }) => repo.list(query), {
             query: ListQuery,
-            response: { 200: Page, 422: ErrorBody },
+            response: { 200: Page, 422: ErrorBody, 500: ErrorBody },
             detail: { summary: "List tickets, filtered and paginated, newest first" },
           }),
       )

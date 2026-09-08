@@ -29,6 +29,10 @@ describe("parseClassification", () => {
     "Why was the customer charged twice?",
     "مشتری می\u200Cخواهد بازپرداخت شود.", // Persian with ZWNJ: format characters real scripts need stay allowed
     "Customer is 👩\u200D💻 and cannot log in.",
+    "客户无法登录。",
+    "顧客は「なぜ？」と尋ねている。", // a closing quote after a CJK terminator is the same sentence
+    'Customer sees the error "登录失败。" when signing in.',
+    "العميل لا يستطيع الدخول؟",
   ])("accepts the single sentence %j", (summary) => {
     expect(parseClassification(JSON.stringify({ ...valid, summary })).summary).toBe(summary);
   });
@@ -59,6 +63,23 @@ describe("parseClassification", () => {
     [
       "a summary with a line break",
       JSON.stringify({ ...valid, summary: "Charged twice.\nWants refund." }),
+    ],
+    [
+      "two Chinese sentences",
+      JSON.stringify({ ...valid, summary: "客户无法登录。密码重置无效。" }),
+    ],
+    [
+      "two Chinese sentences with a space",
+      JSON.stringify({ ...valid, summary: "客户无法登录。 密码重置无效。" }),
+    ],
+    [
+      "two Arabic sentences",
+      JSON.stringify({ ...valid, summary: "العميل لا يستطيع الدخول؟ إعادة التعيين لا تعمل." }),
+    ],
+    ["an invisible summary", JSON.stringify({ ...valid, summary: "\u200B\u200C\u200D" })],
+    [
+      "a lone surrogate in the summary",
+      JSON.stringify({ ...valid, summary: "Half an emoji \ud83d." }),
     ],
   ])("rejects %s", (_name, text) => {
     expect(() => parseClassification(text)).toThrow(InvalidModelOutput);

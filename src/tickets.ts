@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { TLiteral, TUnion } from "@sinclair/typebox";
+import { FormatRegistry, type TLiteral, type TUnion, Type } from "@sinclair/typebox";
 import { t } from "elysia";
 
 const CATEGORIES = ["billing", "technical", "account", "other"] as const;
@@ -11,6 +11,19 @@ type Priority = (typeof PRIORITIES)[number];
 type Status = (typeof STATUSES)[number];
 
 type Literals<T extends readonly string[]> = { -readonly [K in keyof T]: TLiteral<T[K]> };
+
+/**
+ * JSON can carry a lone UTF-16 surrogate ("\ud800"); the SQLite driver rewrites such strings on the
+ * way in, so a row could be stored that the response schema then rejects. Refuse them at the door.
+ */
+FormatRegistry.Set("well-formed", (value) => value.isWellFormed());
+const text = (maxLength: number) =>
+  t.String({
+    maxLength,
+    format: "well-formed",
+    description: "Well-formed Unicode: no lone UTF-16 surrogates.",
+    error: `must be well-formed text of at most ${maxLength} characters`,
+  });
 
 /**
  * A union of literals rather than Elysia's `t.UnionEnum`: the latter, when optional in a query,
@@ -28,7 +41,7 @@ const oneOf = <const T extends readonly string[]>(values: T): TUnion<Literals<T>
 export const Classification = t.Object({
   category: oneOf(CATEGORIES),
   priority: oneOf(PRIORITIES),
-  summary: t.String({ minLength: 1, maxLength: 500 }),
+  summary: t.String({ minLength: 1, maxLength: 500, format: "well-formed" }),
 });
 export type Classification = typeof Classification.static;
 
@@ -42,8 +55,8 @@ export const NewTicket = t.Object({
     pattern: ID_PATTERN,
     error: "must be 1-100 characters: letters, digits, . _ : @ -, starting with a letter or digit",
   }),
-  subject: t.String({ maxLength: 500 }),
-  body: t.String({ maxLength: 20_000 }),
+  subject: text(500),
+  body: text(20_000),
 });
 export type NewTicket = typeof NewTicket.static;
 
@@ -75,7 +88,7 @@ export const Ticket = t.Object({
   ...NewTicket.properties,
   status: oneOf(STATUSES),
   classification: t.Nullable(Classification),
-  attempts: t.Integer(),
+  attempts: Type.Integer(),
   error: t.Nullable(t.String()),
   createdAt: t.String(),
   updatedAt: t.String(),
@@ -84,9 +97,9 @@ export type Ticket = typeof Ticket.static;
 
 export const Page = t.Object({
   items: t.Array(Ticket),
-  total: t.Integer(),
-  limit: t.Integer(),
-  offset: t.Integer(),
+  total: Type.Integer(),
+  limit: Type.Integer(),
+  offset: Type.Integer(),
 });
 export type Page = typeof Page.static;
 

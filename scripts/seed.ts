@@ -2,6 +2,7 @@
 import tickets from "../data/tickets.json";
 
 const base = process.argv[2] ?? `http://localhost:${process.env.PORT ?? 3000}`;
+let failed = false;
 
 for (const ticket of tickets) {
   const res = await fetch(`${base}/v1/tickets`, {
@@ -12,4 +13,6 @@ for (const ticket of tickets) {
   const outcome =
     res.status === 201 ? "created" : res.status === 200 ? "already exists" : `HTTP ${res.status}`;
   console.log(`${ticket.id}: ${outcome}`);
+  if (res.status > 201) failed = true;
 }
+if (failed) process.exit(1);

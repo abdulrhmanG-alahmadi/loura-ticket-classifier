@@ -3,10 +3,12 @@
 Reviewed commit **d3b66fe0961c4eef8e2f35f1208ef11d4910ce02**, September 8, 2026. No application code changed.
 
 > Provenance: this pass was run by a separate reviewing agent against the commit above, and the
-> report is reproduced here unedited apart from this note and the file links. Two things changed in the
-> repository afterwards: the provider-error Unicode finding at the end was fixed in `6fb3980`
-> (`src/worker.ts` now flattens the same separator and bidi ranges as summaries), and the system prompt
-> gained one sentence about judging priority by impact. The prompt change was checked separately with
+> report is reproduced here unedited apart from this note and the file links. Three changes relevant to
+> classification landed afterwards: the provider-error Unicode finding at the end was fixed in `6fb3980`
+> (`src/worker.ts` now flattens the same separator and bidi ranges as summaries), the system prompt
+> gained one sentence about judging priority by impact, and the summary validator became stricter
+> (Arabic and CJK terminators, a visible-text check, a well-formedness check); all 100 raw outputs in
+> the evidence file still pass it. The prompt change was checked separately with
 > [`prompt-eval.ts`](prompt-eval.ts) (cases in [`prompt-eval-cases.json`](prompt-eval-cases.json),
 > 34 calls, results in [`prompt-eval-results.json`](prompt-eval-results.json)). The 20-call pass that
 > preceded this one is not included.

@@ -1,8 +1,9 @@
+const MAX = 2 ** 31 - 1; // largest delay setTimeout and AbortSignal.timeout honour
 const int = (name: string, fallback: number, min = 0): number => {
   const raw = process.env[name]?.trim();
   const value = raw ? Number(raw) : fallback;
-  if (!Number.isInteger(value) || value < min)
-    throw new Error(`${name} must be an integer >= ${min}`);
+  if (!Number.isInteger(value) || value < min || value > MAX)
+    throw new Error(`${name} must be an integer from ${min} to ${MAX}`);
   return value;
 };
 
