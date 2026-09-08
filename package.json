@@ -1,0 +1,25 @@
+{
+  "name": "loura-tickets",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "bun": ">=1.2"
+  },
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "seed": "bun scripts/seed.ts",
+    "test": "bun test",
+    "check": "biome check . && tsc --noEmit"
+  },
+  "dependencies": {
+    "@elysiajs/openapi": "^1.4.16",
+    "@sinclair/typebox": "0.34.52",
+    "elysia": "^1.4.30"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.12",
+    "@types/bun": "^1.4.2",
+    "typescript": "^5.9.0"
+  }
+}
