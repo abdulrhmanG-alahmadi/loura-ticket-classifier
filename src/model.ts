@@ -24,9 +24,8 @@ const retryAfterMs = (res: Response) => {
   const header = res.headers.get("retry-after");
   if (!header) return 0;
   const seconds = Number(header);
-  return Number.isFinite(seconds)
-    ? seconds * 1000
-    : Math.max(0, Date.parse(header) - Date.now()) || 0;
+  const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - Date.now();
+  return Math.max(0, ms) || 0;
 };
 
 /** The parts of OpenRouter's envelope we look at. Everything else is ignored. */

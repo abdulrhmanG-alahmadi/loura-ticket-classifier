@@ -3,6 +3,8 @@ import { ModelError } from "./model";
 import type { Classification, NewTicket, Ticket, TicketRepo } from "./tickets";
 
 const MAX_BACKOFF_MS = 5 * 60_000;
+/** A broken Retry-After must not park a ticket for years, or overflow a Date and stall bookkeeping. */
+const MAX_RETRY_AFTER_MS = 24 * 60 * 60_000;
 const UNSAFE = new RegExp(UNSAFE_CHARS, "gu");
 
 export type WorkerOptions = {
@@ -68,7 +70,7 @@ export class Worker {
    * Any failure, from the model or from the store's own checks, counts as one attempt. A permanent
    * provider error (bad key, bad request) fails the ticket at once; otherwise the next attempt waits
    * for the jittered, capped backoff or for what the provider asked in Retry-After, whichever is
-   * longer. The provider's ask is honoured in full: retrying sooner is a guaranteed failure.
+   * longer. The provider's ask is honoured up to a day: retrying sooner is a guaranteed failure.
    */
   private async process(ticket: Ticket): Promise<void> {
     try {
@@ -77,7 +79,7 @@ export class Worker {
     } catch (err) {
       const attempt = ticket.attempts + 1;
       const permanent = err instanceof ModelError && err.permanent;
-      const asked = err instanceof ModelError ? err.retryAfterMs : 0;
+      const asked = Math.min(err instanceof ModelError ? err.retryAfterMs : 0, MAX_RETRY_AFTER_MS);
       const backoff = this.opts.backoffMs * 2 ** (attempt - 1) * (0.5 + Math.random());
       const delay = Math.max(Math.min(backoff, MAX_BACKOFF_MS), asked);
       const retryAt =

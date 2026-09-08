@@ -157,6 +157,15 @@ describe("worker", () => {
     };
     await new Worker(repo, patient, opts).tick();
     expect(dueIn("t-3")).toBeGreaterThan(595_000);
+
+    submit("t-4"); // an absurd ask is clamped to a day, so the date stays valid and the attempt counts
+    const absurd = async () => {
+      throw new ModelError("openrouter 429: slow down", false, 1e300);
+    };
+    await new Worker(repo, absurd, opts).tick();
+    expect(repo.get("t-4")).toMatchObject({ status: "pending", attempts: 1 });
+    expect(dueIn("t-4")).toBeGreaterThan(86_000_000);
+    expect(dueIn("t-4")).toBeLessThanOrEqual(86_400_000 + 1_000);
   });
 
   test("backoff is jittered by ±50% around the base delay", async () => {

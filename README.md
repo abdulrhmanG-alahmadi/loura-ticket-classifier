@@ -133,8 +133,9 @@ output that fails validation. Two exceptions to "wait and try again": a permanen
 4xx other than 408 and 429, so a bad key or a bad request) fails the ticket on the first attempt,
 because waiting cannot fix it; and when the provider sends `Retry-After` (on a 4xx/5xx or inside
 a 200 envelope), the next attempt waits for that or for the backoff, whichever is longer, rather
-than burning three attempts in three seconds against a rate limit. Only our own backoff is capped;
-the provider's ask is honoured in full, because retrying sooner is a guaranteed failure.
+than burning three attempts in three seconds against a rate limit. Our own backoff is capped at
+5 min; the provider's ask is honoured up to a day, because retrying sooner is a guaranteed failure
+and a broken header must not park a ticket forever.
 Validation failures are retried too: a retry costs one more call, and OpenRouter may route it to a
 different upstream provider. I have not measured how often that helps (in 134 live calls no output
 failed validation), so it is a cheap bet, not an established fact. `failed` tickets keep their last
