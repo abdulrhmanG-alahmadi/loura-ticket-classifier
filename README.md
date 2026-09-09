@@ -1,51 +1,63 @@
 # Ticket classifier
 
-A small HTTP service that ingests support tickets, classifies them asynchronously with an LLM,
-and serves the results. Bun + Elysia + SQLite, about 750 lines of source and 900 of tests.
+A Bun + Elysia + SQLite service that ingests support tickets, classifies them asynchronously,
+and exposes the results through an HTTP API.
 
-## Run it
+## Run
 
-Needs [Bun](https://bun.sh) 1.2 or newer (built and tested on 1.4). Nothing else.
+Requires [Bun](https://bun.sh) 1.2 or newer; built and tested on 1.4. No Docker or external services required.
 
 ```sh
 bun install
-bun run dev          # http://localhost:3000, fake model, SQLite created at data/tickets.db
-bun run seed         # in another terminal: loads the 10 sample tickets through the API
+bun run dev          # http://localhost:3000; creates data/tickets.db
+bun run seed         # in another terminal: loads the 10 appendix tickets
 bun test
+bun run check        # Biome and TypeScript
 ```
 
-Interactive API docs are at <http://localhost:3000/openapi> (spec at `/openapi/json`), generated
-from the same schemas that validate requests and responses.
-With no `OPENROUTER_API_KEY` the service uses a built-in fake model (see below). To use a real
-model, copy `.env.example` to `.env` and set the key; `OPENROUTER_API_KEY= bun run dev` forces the
-fake even if your shell has a key. `bun run seed [baseUrl]` targets another host. Delete
-`data/tickets.db*` to start over. `CLASSIFY_MAX_ATTEMPTS=1 bun run dev` makes the fake's broken
-answers land as `failed` tickets instead of retries. `bun run check` runs Biome and `tsc`.
+Without `OPENROUTER_API_KEY`, the service uses a keyword-based fake that returns plausible
+classifications and a broken response every fourth call. This exercises retries without credentials.
+It is deliberately steerable by ticket keywords, so its behavior is not evidence about live-model safety.
+
+For a real model, copy [.env.example](.env.example) to `.env` and set the key.
+`OPENROUTER_API_KEY= bun run dev` forces the fake. Set `CLASSIFY_MAX_ATTEMPTS=1` to see its broken
+responses become failed tickets. `bun run seed [baseUrl]` can target another host.
+
+Interactive docs: [/openapi](http://localhost:3000/openapi); specification: `/openapi/json`.
+Both use the same schemas as request and response validation.
 
 ## API
 
-| Method | Path | Notes |
+| Method | Path | Behavior |
 | --- | --- | --- |
-| `POST` | `/v1/tickets` | Body `{ id, subject, body }`. `id` is 1–100 chars of letters, digits, `. _ : @ -`, starting with a letter or digit, so it survives a URL. `subject` (up to 500 chars) and `body` (up to 20,000) must be well-formed text (a lone UTF-16 surrogate is a 422, because the SQLite driver would rewrite it). `201` + `Location` on create, `200` with the stored ticket if the id was seen before. |
-| `GET` | `/v1/tickets/:id` | `404` if unknown. |
-| `GET` | `/v1/tickets` | Filters `category`, `priority`, `status`; `limit` (1–100, default 20) and `offset`. Returns `{ items, total, limit, offset }`, newest first. |
+| POST | `/v1/tickets` | Accepts `{ id, subject, body }`. Returns `201` + `Location` for a new ticket, or `200` with the original for an existing ID. Duplicates never rerun classification. |
+| GET | `/v1/tickets/:id` | Returns the ticket, or `404` if unknown. |
+| GET | `/v1/tickets` | Filters by `category`, `priority`, and/or `status`. Returns `{ items, total, limit, offset }`, newest first. |
+
+IDs are 1–100 ASCII letters, digits, or `._:@-`, starting with a letter or digit. Subject and body
+may be empty, must be well-formed Unicode, and are limited to 500 and 20,000 characters respectively.
+Pagination uses `limit` (1–100, default 20) and `offset` (default 0).
 
 ```sh
 curl -X POST localhost:3000/v1/tickets -H 'content-type: application/json' \
-  -d '{"id":"t-1001","subject":"Charged twice this month","body":"Two charges of 49.00 ..."}'
-curl localhost:3000/v1/tickets/t-1001
+  -d '{"id":"demo-1","subject":"Charged twice","body":"Two charges appeared for one subscription."}'
+curl localhost:3000/v1/tickets/demo-1
 curl 'localhost:3000/v1/tickets?category=billing&priority=high&limit=10'
 ```
 
-A ticket:
+A classified ticket looks like:
 
 ```json
 {
-  "id": "t-1001",
-  "subject": "Charged twice this month",
-  "body": "...",
+  "id": "demo-1",
+  "subject": "Charged twice",
+  "body": "Two charges appeared for one subscription.",
   "status": "classified",
-  "classification": { "category": "billing", "priority": "high", "summary": "..." },
+  "classification": {
+    "category": "billing",
+    "priority": "high",
+    "summary": "The customer reports two charges for one subscription."
+  },
   "attempts": 0,
   "error": null,
   "createdAt": "2026-09-08T12:00:00.000Z",
@@ -53,204 +65,91 @@ A ticket:
 }
 ```
 
-`status` is one of `pending` → `classifying` → `classified` | `failed`. The assignment names three
-states; I added `classifying` because it is the state a restart has to find (see below) and because
-a consumer can tell "queued" from "being worked on". A ticket in `pending` with `attempts > 0` is
-waiting out a retry. `classification` is `null` unless `status` is `classified`. `error` holds the
-last failure message while a ticket is retrying or once it is `failed`; it is provider or parser
-text meant for operators, so treat it as untrusted too. Every error the service itself produces
-has the same shape:
+Categories: `billing`, `technical`, `account`, `other`. Priorities: `low`, `medium`, `high`.
+Status moves `pending → classifying → classified | failed`; retries return to `pending`.
+`classifying` distinguishes queued from active work and identifies interrupted work on restart.
+`classification` is null until success. `attempts` counts recorded failures; `error` holds the last
+failure while retrying or failed and is cleared on success.
 
-```json
-{ "error": { "code": "validation", "message": "invalid request",
-             "details": [{ "path": "/category", "message": "must be one of: billing, technical, account, other" }] } }
-```
+Errors use `{ "error": { "code": "validation", "message": "invalid request", "details": [...] } }`.
+Validation details identify the offending fields. Codes are `bad_request` (400, malformed JSON),
+`validation` (422), `not_found` (404), and `internal` (500, generic message). Response-schema failures
+are server errors. Bodies over 64 KB receive Bun's bare `413`, outside the JSON error handler.
 
-with codes `bad_request` (400, unparseable JSON), `validation` (422), `not_found` (404) and
-`internal` (500, message never leaks; a response that fails its own schema is also a 500, since
-that is the server's fault, not the caller's). The one exception is size: bodies over 64 KB get
-Bun's bare 413 at the transport, before any of this code runs.
+**API choices:** `201` means the ticket already exists, although classification is pending.
+The ID doubles as the idempotency key, so duplicates return the original. Limit/offset is simple
+for a small dataset; `/v1` leaves room for future breaking changes.
 
-Shape choices worth defending: `POST` returns `201`, not `202`, because the ticket resource exists
-immediately; only its classification is pending, and `status` says so. A repeated id returns `200`
-with the original rather than `409`, because the id *is* the idempotency key and replaying a
-submission should be boring. Pagination is limit/offset because the dataset is small and `total` is
-useful to callers; cursors would be the upgrade if the list ever gets large or hot. `/v1` costs
-nothing now and saves a migration later.
+## Design decisions
 
-## Where things are
+**Storage:** one SQLite table via `bun:sqlite`, using WAL and `synchronous=FULL` for persistence.
+The table also serves as the queue through `status` and `nextAttemptAt`; enum constraints provide
+a second check. This avoids operating a separate database or queue, at the cost of a single-process design.
 
-```
-src/
-  app.ts         HTTP routes, error envelope, OpenAPI
-  tickets.ts     request/response schemas, types, and every SQL statement (TicketRepo)
-  db.ts          SQLite schema; CHECK constraints mirror the allowed sets
-  worker.ts      claim → classify → store loop, retries, drain on stop
-  classifier.ts  the model boundary: prompt, parse, validate
-  model.ts       "messages in, text out": OpenRouter client and the fake
-  config.ts      environment variables
-  index.ts       wiring and graceful shutdown
-tests/           one file per concern: classifier, model, lifecycle, app (HTTP), service (real process)
-data/            sample tickets (loaded by scripts/seed.ts) and the SQLite file
-docs/redteam/    the 100-call red-team report with raw evidence, and the prompt comparison
-```
+**Async work and concurrency:** worker loops poll every 250 ms and atomically claim a ticket with
+`UPDATE … RETURNING`. Each loop awaits one classification. `CLASSIFY_CONCURRENCY` defaults to 2
+to limit provider load; claims are ordered by when work becomes due so retries do not jump the queue.
 
-## Decisions on the open questions
+**Restart:** startup returns all `classifying` tickets to `pending`. This is at-least-once processing:
+a crash after a model response but before saving it can repeat the call. Interrupted attempts are
+not counted, so a repeatedly crashing job can loop. This recovery assumes only one service process.
 
-**Storage: SQLite, one table, via `bun:sqlite`.** Zero dependencies, durable across restarts (WAL
-with `synchronous = FULL`, so a `201` means the row is on disk), and the queue is the same table:
-`status` plus `nextAttemptAt` is all the worker needs. The enum columns carry `CHECK` constraints,
-so even a regression in application validation cannot put an out-of-set value in the store (there
-is a test that proves it). The cost is that it is single-node.
-Moving to Postgres means rewriting the SQL in `tickets.ts` and `db.ts` (`claimNext` becomes
-`FOR UPDATE SKIP LOCKED`) and giving the tests a real database instead of `:memory:`.
+**Failures and retries:** three attempts by default, a 30-second model timeout, and exponential
+backoff (1 s, then 2 s, ±50% jitter; capped at 5 minutes). Provider 4xx errors other than 408/429
+fail immediately because repeating the same request is unlikely to help. Other failures, including
+invalid output, retry before becoming `failed`.
 
-**Async execution: in-process worker loops polling the table.** A ticket is claimed with a single
-`UPDATE … WHERE id = (SELECT … LIMIT 1) RETURNING *`, which is atomic, so N loops can share the
-queue without a lock. Claims are ordered by `nextAttemptAt`, so a ticket coming back from backoff
-queues behind the ones that arrived while it waited. Polling every 250 ms is dumb and reliable; a
-wake-up signal on insert would be the first optimisation. SQLite waits up to 5 s for a concurrent
-writer (`busy_timeout`); if a
-write still fails after the model has answered, the worker hands the ticket back to `pending`
-rather than leaving it orphaned in `classifying`, and a thrown claim costs one poll interval, not
-the loop. No external queue because the assignment does not need one and an extra process would
-double the "run from a clean clone" steps.
+`Retry-After` accepts seconds or an HTTP date, including on an error inside an HTTP 200 response.
+The longer of backoff and the provider delay wins. Provider delays are capped at one day to prevent
+absurd headers from overflowing the retry date or leaving work queued indefinitely. Retrying invalid
+output may help, but its benefit has not been measured. Failed tickets remain queryable with
+`?status=failed`; there is no replay endpoint.
 
-**Concurrency: `CLASSIFY_CONCURRENCY` loops, default 2.** The real bound is the model provider's
-rate limit, not this service. Each loop holds at most one ticket in flight.
+**Model validation:** the provider returns text. The classifier extracts JSON, trims and lowercases
+enums, drops unknown fields, and validates before storage. Summaries are limited to 500 characters;
+malformed Unicode, unsafe controls, and invisible-only text are rejected. Sentence detection is a
+heuristic (see weaknesses). Provider errors are flattened and capped at 500 characters before logging/storage.
 
-**Restart: whatever was `classifying` goes back to `pending`.** With one process, a `classifying`
-row at boot can only be a corpse. Re-queueing is at-least-once: a ticket whose model call had
-returned but whose result was not yet written is sent to the model once more; nothing is
-overwritten, because the first result never reached the store. Attempts are not incremented for
-this, so a ticket that reliably crashed the process would loop; I accepted that because nothing in
-this code path depends on ticket content.
+**Prompt injection:** the system prompt marks ticket text as untrusted, and the ticket is JSON-encoded
+in a separate user message. Output validation restricts the stored fields; the model has no tools or
+authority to perform actions. Input size limits bound each request's size, not total API usage.
+Validation proves shape, not truth: an attacker can still influence valid categories, priorities,
+or summaries. Downstream systems must treat summaries as untrusted content, never instructions or approvals.
 
-**Retries: 3 attempts, exponential backoff with jitter (about 1 s, then 2 s, ±50%, capped at
-5 min), then `failed`.** Every failure counts as one attempt: transport error, timeout
-(`LLM_TIMEOUT_MS`, 30 s per call), a non-2xx, a 200 from OpenRouter with an error inside it, or
-output that fails validation. Two exceptions to "wait and try again": a permanent provider error (a
-4xx other than 408 and 429, so a bad key or a bad request) fails the ticket on the first attempt,
-because waiting cannot fix it; and when the provider sends `Retry-After` (on a 4xx/5xx or inside
-a 200 envelope), the next attempt waits for that or for the backoff, whichever is longer, rather
-than burning three attempts in three seconds against a rate limit. Our own backoff is capped at
-5 min; the provider's ask is honoured up to a day, because retrying sooner is a guaranteed failure
-and a broken header must not park a ticket forever.
-Validation failures are retried too: a retry costs one more call, and OpenRouter may route it to a
-different upstream provider. I have not measured how often that helps (in 134 live calls no output
-failed validation), so it is a cheap bet, not an established fact. `failed` tickets keep their last
-error and are visible via `GET /v1/tickets?status=failed`. There is no re-classify endpoint yet
-(see below).
+The [red-team report and evidence](docs/redteam/README.md) cover 100 calls across two models and a
+34-call prompt comparison. No full override was observed in the 100-call batch, but two GPT-4o-mini
+attacks shifted priority versus their controls. A later prompt adjustment reduced some overrating
+without eliminating it. The report records commit provenance and differing model settings; these
+small experiments do not establish immunity.
 
-**Validation: parse, normalise, check, or reject.** `parseClassification` cuts from the first `{`
-to the last `}` (models like to add prose and code fences), `JSON.parse`s it, lower-cases and trims
-the two enum fields, drops unknown keys, then checks the result against the same TypeBox schema that
-types the API. Anything else throws `InvalidModelOutput` and counts as a failed attempt. Nothing that
-is not a `Classification` can reach `storeClassification`, and the database re-checks the enums.
-"One sentence" is part of the contract, so it is enforced too: a summary containing a sentence
-terminator followed by more text (Latin, Arabic and CJK terminators), any control character, a lone
-surrogate, or nothing but whitespace and format characters, is rejected like a bad enum. The sentence check is a heuristic
-(decimals and version numbers pass; "Mr. Smith" would not), which I accept because the model is
-asked for exactly one sentence and a false positive costs a retry, not data. The stored `error`
-text is capped at 500 characters.
+**Graceful shutdown — selected optional extra:** SIGINT/SIGTERM stops new claims and HTTP acceptance,
+then drains active work before closing SQLite. A 60-second `SHUTDOWN_DEADLINE_MS` bounds stalled
+requests; expiry exits non-zero, and a second signal kills immediately. Forced exits use restart recovery.
 
-**Prompt injection.** Three layers, in order of how much I trust them:
+## Code and tests
 
-1. Output validation is the real defence. Whatever the model is talked into, the only things it can
-   change are one of four categories, one of three priorities, and a summary string. It cannot make
-   the service *do* anything.
-2. The ticket is passed inside a JSON string in the user message, so there is no closing tag a body
-   could forge to "escape" into instruction territory, and the system prompt tells the model the
-   content is untrusted and may contain instructions to ignore.
-3. Size limits at the API boundary (schema and transport) keep a hostile submitter from running up
-   the token bill.
+`src/app.ts` holds HTTP routes; `tickets.ts` schemas and SQL; `db.ts` the database schema;
+`worker.ts` scheduling; `classifier.ts` the model boundary; `model.ts` the provider and fake;
+`config.ts` configuration; `index.ts` startup/shutdown. Samples and their loader are in
+`data/tickets.json` and `scripts/seed.ts`.
 
-What is *not* defended: a determined injection can still steer the category or priority, and the
-summary is model-generated text that may echo the attacker's words. A well-formed answer such as
-`technical / high / "Approved for immediate refund."` passes validation, because validation proves
-shape, not truth. Anything downstream should treat `summary` as untrusted user content, never as an
-instruction or an authorisation. Two red-team passes were run: a 20-call pass (not included) and
-then a 100-call pass of 45 attack variants and 5 controls on each of `gpt-4o-mini` and `glm-5.3`
-(the latter with a larger output cap; see the report): role spoofs, CEO and signed-policy claims,
-few-shot poisoning, instructions in five languages, base64 and ROT13, format sabotage. No full
-override was observed: no false approval, no injected text in a summary, and no category different
-from the matched control. Priority did move, on `gpt-4o-mini` only: it rated a clean invoice
-question `low` with a neutral subject and `high` with the subject "URGENT", and two attack variants
-moved the same question from `low` to `medium` against its control; the original t-1005 injection
-with a neutral subject came back `low`. So the CEO text on its own did not steer the model, but a
-bare urgency word did, and two attack variants shifted priority one step, which is a triage-quality
-problem rather than a security one. The priority rule in the prompt now says to judge by described
-impact, not by urgency words or claims of authority. I checked that sentence with one `gpt-4o-mini`
-call per input at temperature 0 over the 10 samples plus 7 controls and injection variants, old
-prompt against new (34 calls): the "URGENT" invoice question dropped from `high` to `low`, two
-over-rated samples (t-1004, t-1009) each moved down one step, nothing moved up, and the outage and
-blocked login tickets kept `high`. It did not fix everything: t-1005 and the two injection variants
-still land at `medium` rather than `low`, and a single deterministic run is too small to call this
-more than a plausible improvement. The 100-call report with its raw payloads and responses, and the
-one-off prompt comparison script with its results, are in `docs/redteam/`.
+The tests cover HTTP validation/idempotency/filtering, model parsing and provider failures, retries,
+concurrency, restart recovery, Unicode boundaries, and shutdown. Repository/worker tests use in-memory
+SQLite; service tests spawn real processes. `config.ts` has no committed tests. Console output is
+silenced during tests. No live model is required.
 
-Text that reaches the store or the logs is also kept plain: summaries may not contain control
-characters, Unicode line or paragraph separators, or bidirectional overrides (other format
-characters such as ZWNJ are allowed, because real scripts need them), and provider error text has
-the same characters flattened before it is stored or logged, so an upstream error cannot forge a
-log line.
+## Weaknesses and next steps
 
-**Model: OpenRouter if a key is set, otherwise a fake.** The OpenRouter client knows nothing about
-tickets: it is `messages → string`, with a timeout, and it type-checks the provider's envelope
-before trusting it (OpenRouter can return an error inside a 200). The fake in the same file is the
-exception, because it has to answer: it reads the ticket out of the prompt,
-picks the category whose keyword appears earliest (so the subject outweighs an aside in the body),
-summarises the subject line, and returns a broken response every 4th call (prose, wrong enums,
-truncated JSON, in rotation) so the retry path is exercised locally; with the default 3 attempts
-the seed run shows retries but rarely a `failed` ticket. Being keyword-based, the fake is steered
-by injected text exactly as a naive model would be: "URGENT" makes t-1005 high, and appending
-"not urgent, nice to have" to an outage report drops it to low. There is a test that pins that
-behaviour as a known limit, so nobody mistakes the fake for a judgment about the live model.
-
-**Graceful shutdown (the optional extra I picked).** On `SIGINT`/`SIGTERM` the workers stop
-claiming and the server stops accepting at the same moment; then in-flight requests complete, the
-loops finish the ticket they hold, and the database is closed. Two different waits: the worker
-drain is bounded by the 30 s model timeout, but the HTTP drain waits for in-flight requests and a
-client that stalls mid-upload can hold it open, so a deadline (`SHUTDOWN_DEADLINE_MS`, 60 s) ends
-the drain regardless with a non-zero exit. A second signal kills the process outright. Either way
-the restart path above covers whatever was in flight.
-
-## Tests
-
-`bun test` runs 102 tests in about a second. `classifier` covers the parse/validate door with
-good, wrapped, and broken model output, plus the real t-1005; `model` stubs `fetch` to cover
-OpenRouter's envelopes and checks the fake against the samples; `lifecycle` covers the state
-machine, claiming, retries, restart, drain, and the database's own constraints, all on in-memory
-SQLite; `app` drives the routes through `app.handle` (and one real socket for the 413 cap);
-`service` spawns the real `src/index.ts`, ingests, waits for classification, sends SIGTERM,
-plants a `classifying` row and boots again to see it recovered, and checks that a second signal
-kills a drain held open by a stalled request. Not under test: `config.ts`.
-Console output is silenced during tests (`tests/setup.ts`) because the worker and error hook log
-on purpose.
-
-## With more time
-
-- `POST /v1/tickets/:id/reclassify` plus a `promptVersion` column, so failed tickets and tickets
-  classified under an old prompt can be redone.
-- Wake the worker on insert instead of polling.
-- A labelled evaluation set; with a live model, t-1005 and t-1009 (two topics in one ticket) are
-  the ones I would watch.
-- Request ids in logs and responses, and authentication. Today the service assumes it sits on a
-  private network.
-
-## Weaknesses
-
-- Single process, single SQLite file. Fine for the scenario, not for many ingest nodes.
-- The worker polls. At 250 ms that is invisible, but it is still a timer.
-- The list query uses `($x IS NULL OR col = $x)` so one prepared statement covers every filter
-  combination; SQLite cannot use an index for that form, so it is a table scan (there is no index
-  on `category`/`priority` for that reason). Deliberate at this size; a dynamic `WHERE` plus an
-  index is the fix when it matters.
-- Case-normalising enums is a leniency I chose deliberately; a purist would reject `"Billing"`.
-- The one-sentence check is a regex. It cannot tell an abbreviation from a sentence end, so a
-  summary like "Mr. Smith was charged twice." is rejected and retried; and it needs whitespace after
-  a Latin or Arabic terminator, so "Cannot log in.Reset fails." slips through, because requiring
-  none would reject decimals and domain names.
-- Elysia quirk worth knowing: an optional `t.UnionEnum` in a query schema silently defaults to the
-  enum's first value, which turned every unfiltered list into `category=billing` until a test caught
-  it. `tickets.ts` uses a union of literals instead.
+- **Production storage.** I would use PostgreSQL in production for a shared database across service
+  instances, with atomic worker claims using `FOR UPDATE SKIP LOCKED` and per-job leases for recovery.
+  SQLite keeps this take-home easy to run without external services.
+- **Single process and local SQLite.** A failed write after a successful model call can cause another
+  call. If even failure recording and requeueing fail, restart recovers the stranded ticket.
+- **Sentence heuristic.** Abbreviations can cause false rejection; missing spaces or quoted sentence
+  endings can let multiple sentences through. Stricter punctuation rules would reject valid summaries too.
+- **Small-dataset queries.** Optional-filter SQL scans the table, and offset pages can shift as data
+  changes. Use indexed queries and cursors if scale requires them; wake workers on inserts to reduce polling.
+- **Private-network assumption.** No authentication or inbound rate limiting. Ticket errors expose provider
+  diagnostics intended for operators. Add access controls and request IDs before wider deployment.
+- **Future functionality.** Add explicit reclassification with a prompt version and a labelled accuracy
+  evaluation, especially for ambiguous or multi-topic tickets.
