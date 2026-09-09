@@ -76,7 +76,8 @@ Validation details identify the offending fields. Codes are `bad_request` (400, 
 `validation` (422), `not_found` (404), and `internal` (500, generic message). Response-schema failures
 are server errors. Bodies over 64 KB receive Bun's bare `413`, outside the JSON error handler.
 
-**API choices:** `201` means the ticket already exists, although classification is pending.
+**API choices:** `201` rather than `202`, because the ticket resource exists as soon as it is
+created; only its classification is pending, and `status` says so.
 The ID doubles as the idempotency key, so duplicates return the original. Limit/offset is simple
 for a small dataset; `/v1` leaves room for future breaking changes.
 
